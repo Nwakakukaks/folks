@@ -387,6 +387,14 @@ export default function PropertiesPanel({ forceShow, sendParameterUpdate, isStre
     
     updateNodeConfig(node.id, { [key]: newValue });
 
+    // Sync pipelineId from pluginConfig to main pipeline node
+    if (nodeType === "pluginConfig" && key === "pipelineId" && typeof newValue === "string") {
+      const pipelineNode = nodes.find((n) => n.data.type === "pipeline");
+      if (pipelineNode) {
+        updateNodeConfig(pipelineNode.id, { pipelineId: newValue });
+      }
+    }
+
     const isCodeNode = nodeType === "pluginConfig" || 
       nodeType.startsWith("pipeline_") || 
       nodeType.startsWith("pipeline_custom") ||
