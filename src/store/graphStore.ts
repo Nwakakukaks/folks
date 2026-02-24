@@ -271,7 +271,7 @@ Need help? Check the Guides section in the left panel for tutorials.`,
         type: "pluginConfig",
         position: { x: 200, y: 150 },
         config: {
-          pipelineId: "bloom",
+          pipelineId: "gray",
           pluginName: "Starter",
           pluginDescription: "Starter effects pipeline",
           usage: "postprocessor",
