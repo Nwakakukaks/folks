@@ -72,10 +72,10 @@ interface EffectSchemaField {
 }
 
 function ScopeNode({ id, data, selected }: NodeProps) {
-  const nodeData = data as unknown as {
+  const nodeData = data as any as {
     label: string;
     type: string;
-    config: Record<string, unknown>;
+    config: Record<string, any>;
     localStream?: MediaStream | null;
     remoteStream?: MediaStream | null;
     isStreaming?: boolean;
@@ -140,8 +140,9 @@ function ScopeNode({ id, data, selected }: NodeProps) {
   const videoFileRef = useRef<HTMLInputElement>(null);
   const imageFileRef = useRef<HTMLInputElement>(null);
 
-  const showVideoPreview = nodeData.type === "videoInput";
-  const showImagePreview = nodeData.type === "imageInput";
+  const showVideoPreview = (nodeData.type as string) === "videoInput";
+  const showImagePreview = (nodeData.type as string) === "imageInput";
+  const showTextPrompt = (nodeData.type as string) === "textPrompt";
   const videoPreviewUrl = nodeData.config?.videoPreviewUrl as string | undefined;
   const previewUrl = nodeData.config?.previewUrl as string | undefined;
   const width = nodeData.config?.width as number | undefined;
@@ -620,17 +621,17 @@ function ScopeNode({ id, data, selected }: NodeProps) {
 
 
       {/* Text preview for textPrompt */}
-      {nodeData.type === "textPrompt" && (
+      {showTextPrompt ? (
         <div className="p-2">
           <textarea
             className="w-full px-2 py-1.5 bg-muted rounded text-xs text-foreground resize-none"
             rows={3}
             placeholder="Enter prompt..."
-            value={String(nodeData.config?.text || "")}
+            value={String((nodeData.config?.text as string) ?? "")}
             onChange={(e) => updateNodeConfig(id, { text: e.target.value })}
           />
         </div>
-      )}
+      ) : <></>}
 
       {/* Output preview */}
       {isOutput && (
