@@ -1,58 +1,83 @@
-# OpenScope
+# Folks
 
-Visual node-based plugin builder for Daydream Scope. Build Scope plugins visually by connecting nodes, preview in real-time, and export as Python files ready to install.
+AI-powered visual performance platform for live VJing and generative shows. Control real-time AI video processing with intelligent agents that respond to music.
 
 ## Overview
 
-OpenScope is a visual plugin builder that lets you create AI video processing pipelines for Daydream Scope without writing code. Connect nodes to define your pipeline, adjust parameters visually, and export ready-to-use plugins.
+Folks is a next-generation visual performance tool that combines AI video processing with an intuitive control system. Five unique AI agents—Echo, Vesper, Riley, Maya, and Luna—each bring their own visual style and personality to transform your shows. Whether you're performing live or creating pre-rendered content, Folks gives you the power of AI-driven visuals at your fingertips.
 
-## Why OpenScope?
+## Why Folks?
 
-We built OpenScope to make video AI processing accessible to everyone. Instead of writing Python code, you can visually compose processors using an intuitive node-based interface. Whether you want to create pre-processors, post-processors, or full AI pipelines, OpenScope makes it simple.
+We built Folks for performers who want AI-powered visuals without the complexity. Instead of configuring pipelines and writing code, you pick an agent whose style matches your vibe, connect your audio or video source, and let the AI handle the rest. Real-time, reactive, and beautiful.
 
 ## Features
 
-- **Visual Node Builder** - Drag and drop nodes to create custom pipelines
-- **Real-time Code Preview** - Toggle to see live Python code that updates instantly when you change parameters
-- **Plugin Export** - Export as a valid Daydream-compatible plugin ZIP with correct folder structure
-- **AI-Assisted Development (Beta)** - Describe what you want, and AI generates the Python code for your custom processor
-- **Dynamic Pipeline Library** - Processors are loaded dynamically from your Scope server
+- **5 AI Agents** - Each with unique visual styles, personalities, and audio reactivity
+- **Real-time Processing** - Powered by Daydream Scope for low-latency AI video
+- **Audio Reactive** - Visuals respond to bass, mids, and highs
+- **Multiple Input Sources** - Webcam, microphone, video files, or NDI
+- **NDI Output** - Send processed video to any NDI-compatible software
+- **Control Panel** - Full control over pipeline, parameters, and output
+- **Live Streaming** - Built-in HLS player for preview
 
 ## Quick Start
+
+### Prerequisites
+
+- Node.js 18+
+- Python 3.10+
+- Daydream Scope server (runs on port 8000)
 
 ### Frontend
 
 ```bash
-cd openscope
+cd cohort3
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to use the builder.
+Open [http://localhost:3000](http://localhost:3000)
 
-### Backend (Required for full functionality)
+### Backend
 
 ```bash
-cd openscope/backend
+cd cohort3/backend
 
 # Copy environment template
 cp .env.example .env
 
-# Edit .env and add your Groq API key (get free at https://console.groq.com)
-# Add your Scope server URL
+# Edit .env with your settings
+# SCOPE_API_URL=http://localhost:8000
 
 # Run the backend
-./run.sh
+uvicorn folks_backend.main:app --reload --port 3001
 ```
-
-The backend runs on port 3001 and proxies to the frontend.
 
 ### Scope Server
 
-OpenScope connects to a Scope server for pipeline processing. You can:
+Folks connects to a Daydream Scope server for video processing:
 
-1. **Run locally**: `cd scope && uv run daydream-scope`
-2. **Deploy remotely**: See [DEPLOYMENT.md](../DEPLOYMENT.md) for deployment options
+```bash
+cd scope
+uv run daydream-scope --reload
+```
+
+## The Agents
+
+### Echo
+Cyan robotic presence with high-energy glitch aesthetics. Perfect for techno, electronic, and high-tempo sets.
+
+### Vesper
+Warm pink analog soul with VHS and film grain effects. Ideal for nostalgic, emotional, and smooth transitions.
+
+### Riley
+Bold orange typographic consciousness. Makes sound visible through kinetic typography and geometric shapes.
+
+### Maya
+Ethereal purple psychedelic consciousness. Dissolves reality with flowing, organic visual patterns.
+
+### Luna
+Serene green ambient reflection. Creates mirror-like water caustics and slow, flowing motion.
 
 ## Configuration
 
@@ -61,68 +86,48 @@ OpenScope connects to a Scope server for pipeline processing. You can:
 Create a `.env` file in the backend directory:
 
 ```env
-# Groq AI - Get free key at https://console.groq.com
-GROQ_API_KEY=your_groq_api_key
-
-# GitHub - Optional, for publishing plugins
-GITHUB_TOKEN=your_github_token
-
 # Scope API - Your Scope server URL
 SCOPE_API_URL=http://localhost:8000
-```
 
-## Node Types
+# Optional: Groq AI for future features
+GROQ_API_KEY=your_groq_api_key
 
-### Input Nodes
-- **Video Input** - Accept video frames from camera or file
-- **Text Prompt** - Text prompts with weights for generation
-- **Image Input** - Reference images for processing
-
-### Pipeline Nodes
-Dynamically loaded from your Scope server. These include video generation pipelines like:
-- LongLive
-- StreamDiffusion
-- And more from Scope's plugin system
-
-### Pre-processors
-Video processing nodes that run before the main pipeline:
-- **YOLO Mask** - Object detection and masking
-- **Kaleido (Pre)** - Kaleidoscope preprocessing
-- **Custom (Beta)** - AI-generate your own preprocessor
-
-### Post-processors
-Video processing nodes that run after the main pipeline:
-- **Bloom** - Glow effect
-- **Cosmic VFX** - Glitch, retro, distortion effects
-- **VFX Pack** - Color grading, edge detection, blur effects
-- **Kaleido (Post)** - Kaleidoscope symmetry effect
-- **Custom (Beta)** - AI-generate your own postprocessor
-
-## Templates
-
-OpenScope includes starter templates:
-
-- **Blank Plugin** - Start from scratch
-- **Kaleido Effect** - Kaleidoscope mirror effect  
-- **VHS Retro** - Retro CRT/VHS effect
-- **Object Mask** - YOLO-based object masking
-- **Bloom Effect** - Glow/bloom post-processing
-
-## Export
-
-Click "Export" to generate Python code that can be installed as a Scope plugin:
-
-```bash
-# Install locally for development
-uv run daydream-scope install -e /path/to/your-plugin
+# Optional: GitHub for publishing
+GITHUB_TOKEN=your_github_token
 ```
 
 ## Tech Stack
 
-- **Frontend**: Next.js 14, React Flow, TypeScript, Tailwind CSS
+- **Frontend**: Next.js 14, React, TypeScript, Tailwind CSS, Radix UI
 - **Backend**: FastAPI, Python
-- **AI**: Groq (Llama 3.1)
-- **Integration**: PyGithub
+- **Video Processing**: Daydream Scope
+- **Streaming**: WebRTC, HLS
+- **Output**: NDI (Network Device Interface)
+
+## Project Structure
+
+```
+cohort3/
+├── src/
+│   ├── app/              # Next.js pages
+│   ├── components/       # React components
+│   │   ├── AgentSprite.tsx      # Agent visuals
+│   │   ├── ControlDrawerContent.tsx  # Control panels
+│   │   ├── OnboardingModal.tsx      # Setup wizard
+│   │   └── SetControlHub.tsx       # Control buttons
+│   ├── hooks/            # React hooks
+│   │   └── useScopeServer.ts   # Scope API integration
+│   └── agents/           # Agent skills and configs
+├── backend/
+│   ├── folks_backend/    # FastAPI backend
+│   │   └── routers/     # API routes
+│   │       ├── pipelines.py   # Pipeline management
+│   │       ├── plugins.py      # Plugin management
+│   │       ├── outputs.py      # NDI output
+│   │       └── logs.py         # Log streaming
+│   └── .env.example
+└── public/               # Static assets
+```
 
 ## License
 
