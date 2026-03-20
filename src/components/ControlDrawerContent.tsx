@@ -25,6 +25,8 @@ interface ControlDrawerContentProps {
   configSchema: Record<string, any> | null;
   onParamChange: (key: string, value: any) => void;
   sendParameterUpdate: (params: Record<string, any>) => void;
+  onStreamReady?: (stream: MediaStream | null) => void;
+  onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
 }
 
 interface LogEntry {
@@ -61,6 +63,8 @@ export default function ControlDrawerContent({
   configSchema,
   onParamChange,
   sendParameterUpdate,
+  onStreamReady,
+  onInputSourceChange,
 }: ControlDrawerContentProps) {
   const updateSettings = (updates: Partial<ShowSettings>) => {
     if (!settings) return;
@@ -70,7 +74,14 @@ export default function ControlDrawerContent({
   };
 
   if (panel === "input") {
-    return <InputPanel settings={settings} onSettingsChange={updateSettings} />;
+    return (
+      <InputPanel
+        settings={settings}
+        onSettingsChange={updateSettings}
+        onStreamReady={onStreamReady}
+        onInputSourceChange={onInputSourceChange}
+      />
+    );
   }
 
   if (panel === "pipeline") {
@@ -117,9 +128,13 @@ export default function ControlDrawerContent({
 function InputPanel({
   settings,
   onSettingsChange,
+  onStreamReady,
+  onInputSourceChange,
 }: {
   settings: ShowSettings | null;
   onSettingsChange: (updates: Partial<ShowSettings>) => void;
+  onStreamReady?: (stream: MediaStream | null) => void;
+  onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
 }) {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
@@ -129,9 +144,13 @@ function InputPanel({
   const [selectedVideo, setSelectedVideo] = useState<string>("");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [currentSource, setCurrentSource] = useState<'webcam' | 'file' | 'hls'>('webcam');
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const videoFileRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function getDevices() {
@@ -154,9 +173,16 @@ function InputPanel({
 
   const startVideo = useCallback(async () => {
     try {
+      // Stop any existing streams
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
         audio: audioEnabled && selectedAudio ? { deviceId: { exact: selectedAudio } } : false,
@@ -166,27 +192,95 @@ function InputPanel({
         videoRef.current.srcObject = stream;
       }
       setVideoEnabled(true);
+      setCurrentSource('webcam');
+      onStreamReady?.(stream);
+      onInputSourceChange?.('webcam');
     } catch (err) {
       console.error("Failed to start video:", err);
     }
-  }, [selectedVideo, selectedAudio, audioEnabled]);
+  }, [selectedVideo, selectedAudio, audioEnabled, onStreamReady, onInputSourceChange]);
 
   const stopVideo = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
     setVideoEnabled(false);
-  }, []);
+    setCurrentSource('webcam');
+    onStreamReady?.(null);
+  }, [onStreamReady]);
 
-  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // Stop any existing streams
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      if (videoFileRef.current) {
+        videoFileRef.current.pause();
+        videoFileRef.current.src = '';
+        videoFileRef.current = null;
+      }
+
+      // Create video element from file
+      const video = document.createElement('video');
+      video.src = URL.createObjectURL(file);
+      video.muted = true;
+      video.playsInline = true;
+      video.loop = true;
+      video.autoplay = true;
+      videoFileRef.current = video;
+
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error('Failed to load video'));
+      });
+
+      // Create canvas matching video resolution
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      canvasRef.current = canvas;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        console.error('Failed to get canvas context');
+        return;
+      }
+
+      // Start video playback
+      await video.play();
+
+      // Capture stream at 15fps
+      const stream = canvas.captureStream(15);
+      streamRef.current = stream;
+
+      // Continuous frame capture using requestAnimationFrame
+      const drawFrame = () => {
+        if (videoFileRef.current && ctx && canvasRef.current) {
+          ctx.drawImage(videoFileRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+        }
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+      };
+      drawFrame();
+
       setVideoFile(file);
-      stopVideo();
+      setCurrentSource('file');
+      onStreamReady?.(stream);
+      onInputSourceChange?.('file');
       onSettingsChange({ inputType: "video" });
     }
   };
@@ -203,6 +297,13 @@ function InputPanel({
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      if (videoFileRef.current) {
+        videoFileRef.current.pause();
+        videoFileRef.current.src = '';
       }
     };
   }, []);

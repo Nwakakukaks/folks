@@ -9,6 +9,7 @@ import SetControlHub, { ActiveControlPanel } from "@/components/SetControlHub";
 import ControlDrawerContent, { getPanelTitle } from "@/components/ControlDrawerContent";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import HLSPlayer from "@/components/HLSPlayer";
+import { useAutoVJController } from "@/hooks/useAutoVJController";
 import { useScopeServer } from "@/hooks/useScopeServer";
 import { supabase } from "@/lib/supabase";
 import { Play } from "lucide-react";
@@ -45,6 +46,7 @@ export default function AppPage() {
   } = useScopeServer();
 
   const [selectedPipeline, setSelectedPipeline] = useState<string>("");
+  const [inputSource, setInputSource] = useState<'webcam' | 'file' | 'hls'>('hls');
 
   const handlePipelineChange = useCallback((pipelineId: string) => {
     setSelectedPipeline(pipelineId);
@@ -60,6 +62,65 @@ export default function AppPage() {
     sendParameterUpdate({ [key]: value });
   }, [sendParameterUpdate]);
 
+  const handleInputSourceChange = useCallback((source: 'webcam' | 'file' | 'hls') => {
+    setInputSource(source);
+  }, []);
+
+  const handleStreamReady = useCallback((stream: MediaStream | null) => {
+    setInputStream(stream);
+  }, []);
+
+  useAutoVJController({
+    enabled: inputSource === "webcam" && !!inputStream && isConnected,
+    sourceStream: inputStream,
+    onControlFrame: sendParameterUpdate,
+    fps: 8,
+  });
+
+  // connectToScope must be defined before handleInputStreamReady
+  const connectToScope = useCallback(async (stream?: MediaStream | null) => {
+    try {
+      const initialParameters: Record<string, unknown> = {
+        input_mode: settings?.inputType === "audio" ? "audio" : "video",
+        pipeline_ids: ["passthrough"],
+      };
+
+      await loadPipeline(["passthrough"], { input_mode: settings?.inputType });
+
+      await startWebRTC(
+        (stream) => {
+          setRemoteStream(stream);
+        },
+        initialParameters,
+        stream ?? null
+      );
+    } catch (error) {
+      console.error("Scope connection error:", error);
+    }
+  }, [settings?.inputType, loadPipeline, startWebRTC]);
+
+  const disconnectFromScope = useCallback(() => {
+    stopWebRTC();
+    setRemoteStream(null);
+  }, [stopWebRTC]);
+
+  const handleInputStreamReady = useCallback(
+    async (stream: MediaStream) => {
+      setInputStream(stream);
+      setInputSource('hls');
+
+      if (inputStreamRef.current === stream) {
+        return;
+      }
+      inputStreamRef.current = stream;
+
+      if ((settings?.inputType ?? "video") !== "none") {
+        await connectToScope(stream);
+      }
+    },
+    [connectToScope, settings?.inputType],
+  );
+
   // Fetch pipelines on mount
   useEffect(() => {
     fetchPipelines();
@@ -73,6 +134,18 @@ export default function AppPage() {
       outputMainVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
+
+  // Handle input stream changes - reconnect to Scope when source changes
+  useEffect(() => {
+    if (inputStream && isConnected) {
+      // Small delay to allow cleanup of previous connection
+      const timer = setTimeout(() => {
+        disconnectFromScope();
+        setTimeout(() => connectToScope(inputStream), 100);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [inputStream, inputSource]);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -121,32 +194,6 @@ export default function AppPage() {
     }
   }, [user, showAuthModal, inputStream]);
 
-  const connectToScope = useCallback(async (stream?: MediaStream | null) => {
-    try {
-      const initialParameters: Record<string, unknown> = {
-        input_mode: settings?.inputType === "audio" ? "audio" : "video",
-        pipeline_ids: ["passthrough"],
-      };
-
-      await loadPipeline(["passthrough"], { input_mode: settings?.inputType });
-
-      await startWebRTC(
-        (stream) => {
-          setRemoteStream(stream);
-        },
-        initialParameters,
-        stream ?? null
-      );
-    } catch (error) {
-      console.error("Scope connection error:", error);
-    }
-  }, [settings?.inputType, loadPipeline, startWebRTC]);
-
-  const disconnectFromScope = useCallback(() => {
-    stopWebRTC();
-    setRemoteStream(null);
-  }, [stopWebRTC]);
-
   const handleAuthSuccess = (isGuestMode?: boolean) => {
     if (isGuestMode) {
       setUser({ email: "guest@aifolks.local" });
@@ -170,22 +217,6 @@ export default function AppPage() {
     setSettings(newSettings);
     setShowSettings(false);
   };
-
-  const handleInputStreamReady = useCallback(
-    async (stream: MediaStream) => {
-      setInputStream(stream);
-
-      if (inputStreamRef.current === stream) {
-        return;
-      }
-      inputStreamRef.current = stream;
-
-      if ((settings?.inputType ?? "video") !== "none") {
-        await connectToScope(stream);
-      }
-    },
-    [connectToScope, settings?.inputType],
-  );
 
   const drawerPanel = activePanel;
   const pipelineOptions = Object.fromEntries(
@@ -321,6 +352,8 @@ export default function AppPage() {
                 configSchema={configSchema}
                 onParamChange={handleParamChange}
                 sendParameterUpdate={sendParameterUpdate}
+                onStreamReady={handleStreamReady}
+                onInputSourceChange={handleInputSourceChange}
               />
             </>
           )}
