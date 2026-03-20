@@ -105,7 +105,9 @@ export default function AppPage() {
   }, [stopWebRTC]);
 
   const handleInputStreamReady = useCallback(
-    async (stream: MediaStream) => {
+    async (stream: MediaStream | null) => {
+      if (!stream) return;
+      
       setInputStream(stream);
       setInputSource('hls');
 

@@ -138,8 +138,10 @@ export default function Home() {
   );
 
   const handleHlsStreamReady = useCallback(
-    async (stream: MediaStream) => {
-      await startScopeSession(stream);
+    async (stream: MediaStream | null) => {
+      if (stream) {
+        await startScopeSession(stream);
+      }
     },
     [startScopeSession],
   );

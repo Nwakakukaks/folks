@@ -7,6 +7,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "The AI Folks - 24/7 AI VJ Show",
   description: "A 24/7 AI VJ show powered by Daydream Scope.",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 const raleway = Raleway({
