@@ -38,7 +38,6 @@ export default function HLSPlayer({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      // Set canvas size to match video
       const updateCanvasSize = () => {
         if (video.videoWidth && video.videoHeight) {
           canvas.width = video.videoWidth;
@@ -49,29 +48,25 @@ export default function HLSPlayer({
       updateCanvasSize();
       video.addEventListener("loadedmetadata", updateCanvasSize);
 
-      // Draw video frames to canvas
       const drawFrame = () => {
         if (video && ctx && canvas) {
           try {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          } catch (e) {
+          } catch {
             // Ignore draw errors during transition
           }
         }
         animationFrameRef.current = requestAnimationFrame(drawFrame);
       };
 
-      // Start drawing
       drawFrame();
 
-      // Capture stream from canvas at 15fps (canvas captureStream)
       const stream = canvas.captureStream(15);
       canvasStreamRef.current = stream;
       streamReadyCalledRef.current = true;
-      console.log("[HLSPlayer] ✓ Canvas stream created successfully");
       onStreamReady(stream);
     } catch (err) {
-      console.error("[HLSPlayer] Failed to create canvas stream:", err);
+      console.error("Failed to create canvas stream:", err);
     }
   }, [onStreamReady]);
 
@@ -88,15 +83,10 @@ export default function HLSPlayer({
 
     const initHls = async () => {
       try {
-        console.log("[HLSPlayer] Initializing HLS player for:", src);
-        
-        // Check if HLS is natively supported (Safari)
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          console.log("[HLSPlayer] Using native HLS support");
           video.src = src;
           
           video.addEventListener("loadedmetadata", () => {
-            console.log("[HLSPlayer] Video metadata loaded, dimensions:", video.videoWidth, "x", video.videoHeight);
             setIsLoading(false);
             captureCanvasStream();
             if (autoPlay) {
@@ -105,21 +95,17 @@ export default function HLSPlayer({
           });
           
           video.addEventListener("playing", () => {
-            console.log("[HLSPlayer] Video started playing");
             captureCanvasStream();
           });
           
           video.addEventListener("error", () => {
-            console.error("[HLSPlayer] Video element error:", video.error);
             setError("Failed to load video");
             setIsLoading(false);
           });
         } else {
-          // Use hls.js for other browsers
           const Hls = (await import("hls.js")).default;
           
           if (Hls.isSupported()) {
-            console.log("[HLSPlayer] Using hls.js");
             const hls = new Hls({
               enableWorker: true,
               lowLatencyMode: true,
@@ -129,8 +115,7 @@ export default function HLSPlayer({
             hls.loadSource(src);
             hls.attachMedia(video);
 
-            hls.on(Hls.Events.MANIFEST_PARSED, (_event: any, _data: any) => {
-              console.log("[HLSPlayer] HLS manifest parsed");
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
               setIsLoading(false);
               captureCanvasStream();
               if (autoPlay) {
@@ -139,25 +124,22 @@ export default function HLSPlayer({
             });
 
             hls.on(Hls.Events.LEVEL_SWITCHED, () => {
-              console.log("[HLSPlayer] HLS level switched");
               captureCanvasStream();
             });
 
             hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
               if (data.fatal) {
-                console.error("[HLSPlayer] HLS fatal error:", data);
                 setError("Failed to load video stream");
                 setIsLoading(false);
               }
             });
           } else {
-            console.error("[HLSPlayer] HLS not supported in this browser");
             setError("HLS not supported in this browser");
             setIsLoading(false);
           }
         }
       } catch (err) {
-        console.error("[HLSPlayer] HLS initialization error:", err);
+        console.error("HLS initialization error:", err);
         setError("Failed to initialize video");
         setIsLoading(false);
       }
@@ -210,7 +192,6 @@ export default function HLSPlayer({
           <Loader2 className="w-8 h-8 animate-spin text-white/50" />
         </div>
       )}
-      {/* Hidden video element for HLS playback */}
       <video
         ref={videoRef}
         muted={isMuted}
@@ -219,7 +200,6 @@ export default function HLSPlayer({
         className="hidden"
         crossOrigin="anonymous"
       />
-      {/* Visible canvas that mirrors the video */}
       <canvas
         ref={canvasRef}
         className="w-full h-full object-contain"

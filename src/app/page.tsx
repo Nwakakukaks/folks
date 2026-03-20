@@ -111,23 +111,17 @@ export default function Home() {
       setHasStartedStream(false);
 
       try {
-        console.log("[Home] 1. Stopping previous WebRTC...");
         stopWebRTC();
 
-        console.log("[Home] 2. Loading pipeline 'passthrough'...");
         await loadPipeline(["passthrough"], { input_mode: "video" });
-        console.log("[Home] 2. ✓ Pipeline loaded");
 
-        console.log("[Home] 3. Starting WebRTC with stream...");
         await startWebRTC(
           (remoteStream) => {
-            console.log("[Home] 3a. Received remote stream");
             if (mainVideoRef.current) {
               mainVideoRef.current.srcObject = remoteStream;
               mainVideoRef.current.play().catch(console.error);
             }
             setHasStartedStream(true);
-            console.log("[Home] 3a. ✓ Stream started, UI updated");
           },
           {
             input_mode: "video",
@@ -135,10 +129,8 @@ export default function Home() {
           },
           stream,
         );
-        console.log("[Home] 3. ✓ WebRTC offer sent successfully");
       } catch (err) {
-        console.error("[Home] ❌ Failed to start Scope session:", err);
-        // Reset UI state on error so user sees the error
+        console.error("Failed to start Scope session:", err);
         setHasStartedStream(true);
       }
     },
@@ -213,7 +205,7 @@ export default function Home() {
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-20">
                     <Loader2 className="h-12 w-12 animate-spin text-white/50" />
                     <p className="text-sm uppercase tracking-[0.2em] text-white/50">Connecting to Scope...</p>
-                    <p className="text-[10px] text-white/30">Check browser console for logs</p>
+
                   </div>
                 )}
                 {connectionError && !isConnecting && (
@@ -238,7 +230,7 @@ export default function Home() {
                   <span
                     className={`inline-flex h-2 w-2 rounded-full ${hasStartedStream || isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`}
                   />
-                  {hasStartedStream ? "Live Output" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
+                  {hasStartedStream ? "Live" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
                 </div>
                 {isConnecting && (
                   <span className="text-[9px] text-white/30">Initializing WebRTC...</span>

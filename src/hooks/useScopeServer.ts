@@ -102,24 +102,19 @@ export function useScopeServer() {
     try {
       const backendUrl = getBackendUrl();
       const fullUrl = `${backendUrl}${SCOPE_API_URL}/health`;
-      
-      console.log("[useScopeServer] checkConnection: Testing connection to:", fullUrl);
 
       const response = await fetch(fullUrl);
 
       if (response.ok) {
-        console.log("[useScopeServer] checkConnection: ✓ Connected to Scope server");
         setIsConnected(true);
         setError(null);
         return true;
       }
-      console.log("[useScopeServer] checkConnection: ✗ Server returned status:", response.status);
       setIsConnected(false);
       const errorText = await response.text();
       setError(`Server returned ${response.status}: ${errorText}`);
       return false;
     } catch (err) {
-      console.log("[useScopeServer] checkConnection: ✗ Cannot connect:", err);
       setIsConnected(false);
       setError(`Cannot connect to Scope server: ${err}`);
       return false;
@@ -128,48 +123,40 @@ export function useScopeServer() {
 
   const fetchPipelines = useCallback(async () => {
     try {
-      console.log("[useScopeServer] fetchPipelines: Fetching from /api/scope/pipelines...");
       const response = await fetch(
         `${getBackendUrl()}${SCOPE_API_URL}/pipelines`,
       );
-      console.log("[useScopeServer] fetchPipelines: Response status:", response.status);
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("[useScopeServer] fetchPipelines: ✗ Failed:", errorText.substring(0, 200));
+        console.error("Failed to fetch pipelines:", errorText.substring(0, 200));
         return null;
       }
       
       const data = await response.json();
       const pipelinesData = data.pipelines || {};
-      console.log("[useScopeServer] fetchPipelines: ✓ Got", Object.keys(pipelinesData).length, "pipelines");
       setPipelines(pipelinesData);
       
-      // Also fetch plugins (no deps needed)
       fetchPlugins();
       
       return pipelinesData;
     } catch (err) {
-      console.error("[useScopeServer] fetchPipelines: ✗ Error:", err);
+      console.error("Failed to fetch pipelines:", err);
       return null;
     }
   }, []);
 
   const fetchPlugins = useCallback(async () => {
     try {
-      console.log("[useScopeServer] fetchPlugins: Fetching from /api/scope/plugins...");
       const response = await fetch(
         `${getBackendUrl()}${SCOPE_API_URL}/plugins`,
       );
       if (response.ok) {
         const data = await response.json();
-        console.log("[useScopeServer] fetchPlugins: ✓ Got", (data.plugins || []).length, "plugins");
         setPlugins(data.plugins || []);
-      } else {
-        console.error("[useScopeServer] fetchPlugins: ✗ Status:", response.status);
       }
     } catch (err) {
-      console.error("[useScopeServer] fetchPlugins: ✗ Error:", err);
+      console.error("Failed to fetch plugins:", err);
     }
   }, []);
 
@@ -273,22 +260,16 @@ export function useScopeServer() {
       waitForLoad: boolean = true,
     ) => {
       try {
-        console.log("[useScopeServer] loadPipeline called with:", { pipelineIds, loadParams, waitForLoad });
         setIsLoadingPipeline(true);
         setPipelineStatus({ status: "loading" });
         
-        // Set active pipeline and fetch its schema
         const mainPipeline = pipelineIds[pipelineIds.length - 1];
         setActivePipeline(mainPipeline);
-        console.log("[useScopeServer] Active pipeline set to:", mainPipeline);
         
-        // Fetch config schema for the main pipeline
         if (pipelines[mainPipeline]?.config_schema) {
           setConfigSchema(pipelines[mainPipeline].config_schema as Record<string, any>);
-          console.log("[useScopeServer] Config schema loaded for:", mainPipeline);
         }
 
-        console.log("[useScopeServer] Calling POST /api/scope/pipeline/load...");
         const response = await fetch(
           `${getBackendUrl()}${SCOPE_API_URL}/pipeline/load`,
           {
@@ -300,8 +281,6 @@ export function useScopeServer() {
             }),
           },
         );
-
-        console.log("[useScopeServer] Pipeline load response status:", response.status);
 
         if (!response.ok) {
           const contentType = response.headers.get("content-type");
@@ -318,15 +297,11 @@ export function useScopeServer() {
             const errorText = await response.text();
             errorMessage = errorText.substring(0, 200);
           }
-          console.error("[useScopeServer] Pipeline load failed:", errorMessage);
           throw new Error(errorMessage);
         }
 
-        console.log("[useScopeServer] Pipeline load request succeeded");
-
-        // If waitForLoad is true, poll until pipeline is loaded (with shorter timeout)
         if (waitForLoad) {
-          const maxTimeout = 30000; // 30 seconds - reduced from 2 minutes
+          const maxTimeout = 30000;
           const pollInterval = 1000;
           const startTime = Date.now();
 
@@ -338,19 +313,17 @@ export function useScopeServer() {
                 `${getBackendUrl()}${SCOPE_API_URL}/pipeline/status`,
               );
               const statusData = await statusResponse.json();
-              console.log("[useScopeServer] Pipeline status:", statusData);
               setPipelineStatus(statusData);
 
               if (statusData.status === "loaded") {
                 setIsLoadingPipeline(false);
-                console.log("[useScopeServer] ✓ Pipeline loaded successfully");
                 return statusData;
               } else if (statusData.status === "error") {
                 setIsLoadingPipeline(false);
                 throw new Error(statusData.error || "Pipeline load failed");
               }
             } catch (pollErr) {
-              console.error("[useScopeServer] Error polling pipeline status:", pollErr);
+              console.error("Error polling pipeline status:", pollErr);
             }
           }
           setIsLoadingPipeline(false);
@@ -362,7 +335,7 @@ export function useScopeServer() {
         return data;
       } catch (err) {
         setIsLoadingPipeline(false);
-        console.error("[useScopeServer] ❌ loadPipeline failed:", err);
+        console.error("Failed to load pipeline:", err);
         setPipelineStatus({
           status: "error",
           error: err instanceof Error ? err.message : "Unknown error",
@@ -447,19 +420,9 @@ export function useScopeServer() {
       localStream?: MediaStream | null,
     ) => {
       try {
-        console.log("[useScopeServer] startWebRTC called");
-        console.log("[useScopeServer] Backend URL:", getBackendUrl());
-        console.log("[useScopeServer] Initial parameters:", JSON.stringify(initialParameters, null, 2));
-        console.log("[useScopeServer] Local stream present:", !!localStream);
-        if (localStream) {
-          console.log("[useScopeServer] Local stream tracks:", localStream.getTracks().map(t => t.kind));
-        }
-
-        console.log("[useScopeServer] Fetching ICE servers from /api/scope/webrtc/ice-servers...");
         const iceResponse = await fetch(
           `${getBackendUrl()}${SCOPE_API_URL}/webrtc/ice-servers`,
         );
-        console.log("[useScopeServer] ICE servers response status:", iceResponse.status);
         
         if (!iceResponse.ok) {
           const errorText = await iceResponse.text();
@@ -467,15 +430,12 @@ export function useScopeServer() {
         }
         
         const iceData: IceServersResponse = await iceResponse.json();
-        console.log("[useScopeServer] ICE servers received:", iceData);
 
-        // Helper to normalize urls (can be string or array)
         const normalizeUrls = (urls: string | string[]): string[] => {
           if (typeof urls === "string") return [urls];
           return urls;
         };
 
-        // Build ICE server config - handle both string and array formats
         const config: RTCConfiguration = {
           iceServers: [
             ...(iceData.iceServers || []).map((server) => ({
@@ -483,17 +443,13 @@ export function useScopeServer() {
               ...(server.username && { username: server.username }),
               ...(server.credential && { credential: server.credential }),
             })),
-            { urls: "stun:stun.l.google.com:19302" }, // Google fallback
+            { urls: "stun:stun.l.google.com:19302" },
           ],
         };
 
-        console.log("[useScopeServer] ICE servers config prepared, servers count:", config.iceServers?.length || 0);
-
-        console.log("[useScopeServer] Creating RTCPeerConnection...");
         const pc = new RTCPeerConnection(config);
         peerConnectionRef.current = pc;
 
-        // Create data channel for parameter updates (like Scope)
         const dataChannel = pc.createDataChannel("parameters", {
           ordered: true,
         });
@@ -503,7 +459,6 @@ export function useScopeServer() {
           dataChannel.onopen = () => resolve();
         });
 
-        // Add local video track if provided
         let transceiver: RTCRtpTransceiver | undefined;
         if (localStream) {
           localStream.getVideoTracks().forEach((track) => {
@@ -514,13 +469,9 @@ export function useScopeServer() {
             pc.addTrack(track, localStream);
           });
         } else {
-          console.log(
-            "[OpenScope] No video stream - adding video transceiver for no-input pipelines",
-          );
           transceiver = pc.addTransceiver("video");
         }
 
-        // Force VP8 codec for aiortc compatibility (like Scope)
         if (transceiver) {
           const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs || [];
           const vp8Codecs = codecs.filter(
@@ -528,9 +479,6 @@ export function useScopeServer() {
           );
           if (vp8Codecs.length > 0) {
             transceiver.setCodecPreferences(vp8Codecs);
-            console.log(
-              "[OpenScope] Forced VP8-only codec for aiortc compatibility",
-            );
           }
         }
 
@@ -542,55 +490,25 @@ export function useScopeServer() {
           }
         };
 
-        // Log ICE connection state changes
         pc.oniceconnectionstatechange = () => {
-          console.log(
-            "[OpenScope] ICE connection state:",
-            pc.iceConnectionState,
-          );
+          console.log("ICE connection state:", pc.iceConnectionState);
         };
 
         pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            console.log(
-              "[OpenScope] Local ICE candidate:",
-              event.candidate.toJSON(),
-            );
-          }
           if (event.candidate && sessionIdRef.current) {
-            const iceUrl = `${getBackendUrl()}${SCOPE_API_URL}/webrtc/ice?session_id=${sessionIdRef.current}`;
-            console.log("[OpenScope] Sending ICE candidate to:", iceUrl);
-            fetch(iceUrl, {
+            fetch(`${getBackendUrl()}${SCOPE_API_URL}/webrtc/ice?session_id=${sessionIdRef.current}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(event.candidate.toJSON()),
             }).catch((err) =>
-              console.error("[OpenScope] ICE candidate send failed:", err),
+              console.error("ICE candidate send failed:", err),
             );
           }
-        };
-
-        // Log when remote ICE candidates are received
-        const originalAddIceCandidate = pc.addIceCandidate.bind(pc);
-        pc.addIceCandidate = async (candidate) => {
-          console.log("[OpenScope] Adding remote ICE candidate:", candidate);
-          return originalAddIceCandidate(candidate);
         };
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        const requestBody = {
-          sdp: pc.localDescription?.sdp,
-          type: pc.localDescription?.type,
-          initialParameters: initialParameters,
-        };
-        console.log(
-          "[OpenScope] Full request body:",
-          JSON.stringify(requestBody, null, 2),
-        );
-
-        console.log("[useScopeServer] Sending WebRTC offer to /api/scope/webrtc/offer...");
         const response = await fetch(
           `${getBackendUrl()}${SCOPE_API_URL}/webrtc/offer`,
           {
@@ -604,10 +522,7 @@ export function useScopeServer() {
           },
         );
 
-        console.log("[useScopeServer] WebRTC offer response status:", response.status);
-
         if (!response.ok) {
-          // Try to parse JSON error, fall back to text
           const contentType = response.headers.get("content-type");
           let errorMessage = "Failed to create WebRTC offer";
           if (contentType?.includes("application/json")) {
@@ -622,32 +537,23 @@ export function useScopeServer() {
             const errorText = await response.text();
             errorMessage = errorText.substring(0, 200);
           }
-          console.error("[useScopeServer] ❌ WebRTC offer failed:", errorMessage);
           throw new Error(errorMessage);
         }
 
-        console.log("[useScopeServer] Parsing WebRTC answer...");
         const answer: WebRTCOfferResponse = await response.json();
-        console.log("[useScopeServer] WebRTC answer sessionId:", answer.sessionId);
         sessionIdRef.current = answer.sessionId;
 
-        console.log("[useScopeServer] Setting remote description...");
         await pc.setRemoteDescription({
           sdp: answer.sdp,
           type: answer.type as RTCSdpType,
         });
-        console.log("[useScopeServer] Remote description set");
 
-        // Wait for data channel to be ready, then send parameters
-        console.log("[useScopeServer] Waiting for data channel to open...");
         await dataChannelReady;
-        console.log("[useScopeServer] Data channel open, sending parameters...");
         dataChannel.send(JSON.stringify(initialParameters));
-        console.log("[useScopeServer] ✓ WebRTC connection established successfully!");
 
         return pc;
       } catch (err) {
-        console.error("[useScopeServer] ❌ startWebRTC failed:", err);
+        console.error("Failed to start WebRTC:", err);
         throw err;
       }
     },
@@ -666,7 +572,6 @@ export function useScopeServer() {
 
   // Send parameter update via WebRTC data channel
   const sendParameterUpdate = useCallback((params: Record<string, unknown>) => {
-    console.log("[useScopeServer] sendParameterUpdate called with:", JSON.stringify(params, null, 2));
     if (
       dataChannelRef.current &&
       dataChannelRef.current.readyState === "open"
@@ -676,9 +581,6 @@ export function useScopeServer() {
         ...params,
       });
       dataChannelRef.current.send(message);
-      console.log("[useScopeServer] Parameter update sent via data channel:", params);
-    } else {
-      console.warn("[useScopeServer] Data channel not ready for parameter update! readyState:", dataChannelRef.current?.readyState);
     }
   }, []);
 
