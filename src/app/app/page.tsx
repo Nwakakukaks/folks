@@ -220,7 +220,7 @@ export default function AppPage() {
               <div className="absolute bottom-32 inset-x-0 z-20 px-6">
                 <div className="mx-auto w-[min(980px,92vw)] space-y-3">
                   <div className="grid w-full gap-3 md:grid-cols-2">
-                    <div className="h-[280px] overflow-hidden rounded-xl border border-cyan-300/20 bg-black/55 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+                    <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
                       {remoteStream ? (
                         <video
                           ref={outputVideoRef}
@@ -238,7 +238,7 @@ export default function AppPage() {
                         </div>
                       )}
                     </div>
-                    <div className="h-[280px] overflow-hidden rounded-xl border border-pink-300/20 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
+                    <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
                       <HLSPlayer
                         src={HLS_URL}
                         onStreamReady={handleInputStreamReady}

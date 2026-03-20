@@ -45,27 +45,29 @@ export default function SetControlHub({
               <Camera className="h-4 w-4 text-yellow-400" />
               <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Input</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Modes</span>
+        
           </div>
           <div className="mt-1.5 text-xs text-white/70">{settings?.inputType ?? "Select"}</div>
         </button>
 
+      
+
         <button
-          onClick={() => onPanelChange(isPanelActive("output") ? null : "output")}
+          onClick={() => onPanelChange(isPanelActive("pipeline") ? null : "pipeline")}
           className={`group rounded-xl border px-3 py-2.5 text-left transition-all ${
-            isPanelActive("output")
+            isPanelActive("pipeline")
               ? "border-yellow-500/60 bg-yellow-500/10"
               : "border-white/10 bg-black/60 hover:border-white/30"
           }`}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Projector className="h-4 w-4 text-yellow-400" />
-              <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Output</span>
+              <Layers className="h-4 w-4 text-yellow-400" />
+              <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Pipeline</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Targets</span>
+
           </div>
-          <div className="mt-1.5 text-xs text-white/70">{settings?.outputType ?? "Select"}</div>
+          <div className="mt-1.5 text-xs text-white/70 truncate">{activePipeline ? activePipeline : "Select"}</div>
         </button>
 
         <button
@@ -81,9 +83,9 @@ export default function SetControlHub({
               <Cog className="h-4 w-4 text-yellow-400" />
               <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Controls</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Stream</span>
+          
           </div>
-          <div className="mt-1.5 text-xs text-white/70">{isConnected ? "Connected" : "Offline"}</div>
+          <div className="mt-1.5 text-xs text-white/70">{isConnected ? "Set controls" : "Offline"}</div>
         </button>
 
         <button
@@ -99,7 +101,7 @@ export default function SetControlHub({
               <Cpu className="h-4 w-4 text-yellow-400" />
               <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Agent</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Select</span>
+          
           </div>
           <div className="mt-1.5 text-xs text-white/70">{settings?.agent ?? "Choose"}</div>
         </button>
@@ -117,27 +119,27 @@ export default function SetControlHub({
               <SlidersHorizontal className="h-4 w-4 text-yellow-400" />
               <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Log</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Agent</span>
+           
           </div>
-          <div className="mt-1.5 text-xs text-white/70">Mental Process</div>
+          <div className="mt-1.5 text-xs text-white/70">Agent logs</div>
         </button>
 
         <button
-          onClick={() => onPanelChange(isPanelActive("pipeline") ? null : "pipeline")}
+          onClick={() => onPanelChange(isPanelActive("output") ? null : "output")}
           className={`group rounded-xl border px-3 py-2.5 text-left transition-all ${
-            isPanelActive("pipeline")
+            isPanelActive("output")
               ? "border-yellow-500/60 bg-yellow-500/10"
               : "border-white/10 bg-black/60 hover:border-white/30"
           }`}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Layers className="h-4 w-4 text-yellow-400" />
-              <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Pipeline</span>
+              <Projector className="h-4 w-4 text-yellow-400" />
+              <span className="text-[10px] uppercase tracking-[0.24em] text-white/70">Output</span>
             </div>
-            <span className="text-[9px] uppercase tracking-[0.2em] text-white/40">Plugins</span>
+        
           </div>
-          <div className="mt-1.5 text-xs text-white/70 truncate">{activePipeline ?? "Select"}</div>
+          <div className="mt-1.5 text-xs text-white/70">{settings?.outputType ? settings?.outputType : "None"}</div>
         </button>
       </div>
     </div>

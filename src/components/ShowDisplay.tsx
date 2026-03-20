@@ -13,9 +13,6 @@ export default function ShowDisplay() {
 
   return (
     <div className="h-full w-full relative overflow-hidden bg-[#05070f]">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(96,165,250,0.08),_transparent_55%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,_rgba(236,72,153,0.12),_transparent_55%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_15%,_rgba(34,197,94,0.12),_transparent_55%)]" />
 
       <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/10 via-white/5 to-transparent" />
 
@@ -137,29 +134,6 @@ export default function ShowDisplay() {
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent" />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/80 to-transparent" />
         <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-r from-cyan-500/40 via-purple-500/40 to-pink-500/40" />
-      </div>
-
-      <div className="absolute inset-x-0 bottom-0 h-40">
-        <svg className="absolute bottom-0 left-1/2 h-40 w-[90%] -translate-x-1/2" viewBox="0 0 1200 200">
-          <defs>
-            <linearGradient id="stage-edge" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#06b6d4" />
-              <stop offset="50%" stopColor="#a855f7" />
-              <stop offset="100%" stopColor="#ec4899" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M60 140 L200 60 L1000 60 L1140 140 L1000 180 L200 180 Z"
-            fill="rgba(15,15,20,0.9)"
-            stroke="url(#stage-edge)"
-            strokeWidth="3"
-          />
-          <rect x="220" y="80" width="760" height="50" rx="12" fill="rgba(255,255,255,0.04)" />
-          <rect x="260" y="92" width="120" height="20" rx="8" fill="rgba(250,204,21,0.6)" />
-          <rect x="410" y="92" width="120" height="20" rx="8" fill="rgba(34,211,238,0.6)" />
-          <rect x="560" y="92" width="120" height="20" rx="8" fill="rgba(244,114,182,0.6)" />
-          <rect x="710" y="92" width="120" height="20" rx="8" fill="rgba(168,85,247,0.6)" />
-        </svg>
       </div>
 
       <div

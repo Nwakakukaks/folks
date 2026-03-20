@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Camera, Music, Video, Layers, Radio, Wifi, WifiOff, Plus, X, ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { ShowSettings, saveSettings } from "./OnboardingModal";
-import { AGENTS } from "./AgentSprite";
+import { AGENTS, AgentHead } from "./AgentSprite";
 import { ActiveControlPanel } from "./SetControlHub";
 import { getBackendUrl } from "@/hooks/useScopeServer";
 
@@ -714,12 +714,26 @@ function AgentPanel({
                 : "border-white/10 hover:border-white/30"
             }`}
           >
-            <div
-              className="h-9 w-9 rounded-full"
-              style={{
-                background: `linear-gradient(135deg, ${agent.color}40, transparent)`,
-              }}
-            />
+            <div className="relative">
+              <svg
+                width="36"
+                height="36"
+                viewBox="0 0 32 32"
+                className="agent-sprite"
+                style={{ imageRendering: "pixelated" }}
+              >
+                <AgentHead agent={agent} isActive={isActive} isDancing={false} />
+              </svg>
+              {isActive && (
+                <div
+                  className="absolute inset-0 rounded-lg"
+                  style={{
+                    boxShadow: `0 0 12px ${agent.glowColor}`,
+                    opacity: 0.6,
+                  }}
+                />
+              )}
+            </div>
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.2em]">{agent.name}</div>
               <div className="text-[9px] uppercase tracking-wider text-white/40 mt-0.5">
