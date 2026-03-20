@@ -111,17 +111,23 @@ export default function Home() {
       setHasStartedStream(false);
 
       try {
+        console.log("[Home] 1. Stopping previous WebRTC...");
         stopWebRTC();
 
+        console.log("[Home] 2. Loading pipeline 'passthrough'...");
         await loadPipeline(["passthrough"], { input_mode: "video" });
+        console.log("[Home] 2. ✓ Pipeline loaded");
 
+        console.log("[Home] 3. Starting WebRTC with stream...");
         await startWebRTC(
           (remoteStream) => {
+            console.log("[Home] 3a. Received remote stream");
             if (mainVideoRef.current) {
               mainVideoRef.current.srcObject = remoteStream;
               mainVideoRef.current.play().catch(console.error);
             }
             setHasStartedStream(true);
+            console.log("[Home] 3a. ✓ Stream started, UI updated");
           },
           {
             input_mode: "video",
@@ -129,8 +135,11 @@ export default function Home() {
           },
           stream,
         );
+        console.log("[Home] 3. ✓ WebRTC offer sent successfully");
       } catch (err) {
-        console.error("[AI Folks] Failed to start Scope session:", err);
+        console.error("[Home] ❌ Failed to start Scope session:", err);
+        // Reset UI state on error so user sees the error
+        setHasStartedStream(true);
       }
     },
     [loadPipeline, startWebRTC, stopWebRTC],
@@ -200,28 +209,40 @@ export default function Home() {
           <div className="mx-auto max-w-6xl px-6 py-10">
             <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_#2e2e2e,_#0f0f10_70%)]">
               <div className="aspect-[16/9] w-full relative">
-                {!hasStartedStream && (
+                {!hasStartedStream && !connectionError && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-20">
                     <Loader2 className="h-12 w-12 animate-spin text-white/50" />
                     <p className="text-sm uppercase tracking-[0.2em] text-white/50">Connecting to Scope...</p>
+                    <p className="text-[10px] text-white/30">Check browser console for logs</p>
                   </div>
                 )}
                 {connectionError && !isConnecting && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-20">
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-20 bg-black/80">
                     <div className="h-12 w-12 rounded-full border-2 border-red-500/50 flex items-center justify-center">
                       <span className="text-red-500 text-lg">!</span>
                     </div>
                     <p className="text-sm uppercase tracking-[0.2em] text-red-500/70">Scope Server Unavailable</p>
-                    <p className="text-xs text-white/40">{connectionError}</p>
+                    <p className="text-xs text-white/40 max-w-md text-center px-4">{connectionError}</p>
+                    <button 
+                      onClick={() => window.location.reload()}
+                      className="mt-2 px-4 py-2 border border-white/20 rounded-full text-xs uppercase tracking-wider hover:bg-white/10"
+                    >
+                      Retry
+                    </button>
                   </div>
                 )}
                 <video ref={mainVideoRef} className="w-full h-full object-contain" autoPlay muted playsInline />
               </div>
-              <div className="absolute left-6 top-6 flex items-center gap-3 text-[11px] uppercase tracking-[0.35em] text-white/70">
-                <span
-                  className={`inline-flex h-2 w-2 rounded-full ${hasStartedStream || isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`}
-                />
-                {hasStartedStream ? "Live Output" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
+              <div className="absolute left-6 top-6 flex flex-col gap-2 text-[11px] uppercase tracking-[0.35em] text-white/70">
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`inline-flex h-2 w-2 rounded-full ${hasStartedStream || isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`}
+                  />
+                  {hasStartedStream ? "Live Output" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
+                </div>
+                {isConnecting && (
+                  <span className="text-[9px] text-white/30">Initializing WebRTC...</span>
+                )}
               </div>
               <div className="absolute bottom-6 left-6 z-30 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/30 shadow-lg pointer-events-auto">
                 <HLSPlayer src={HLS_URL} onStreamReady={handleHlsStreamReady} className="w-full h-full" />
