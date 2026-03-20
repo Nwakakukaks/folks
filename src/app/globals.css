@@ -3,7 +3,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ComfyUI-style: dark grays + subtle blue accent */
+/* ComfyUI-style: dark grays + yellow accent */
 @layer base {
   :root {
     --background: 220 13% 6%;
@@ -12,19 +12,19 @@
     --card-foreground: 220 10% 96%;
     --popover: 220 12% 9%;
     --popover-foreground: 220 10% 96%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 45 93% 47%;
+    --primary-foreground: 0 0% 0%;
     --secondary: 220 10% 14%;
     --secondary-foreground: 220 10% 96%;
     --muted: 220 10% 14%;
     --muted-foreground: 220 9% 55%;
-    --accent: 220 10% 14%;
-    --accent-foreground: 220 10% 96%;
+    --accent: 45 93% 47%;
+    --accent-foreground: 0 0% 0%;
     --destructive: 0 63% 31%;
     --destructive-foreground: 0 0% 98%;
     --border: 220 10% 18%;
     --input: 220 10% 14%;
-    --ring: 217 91% 60%;
+    --ring: 45 93% 47%;
     --radius: 6px;
   }
 }
@@ -41,7 +41,7 @@
   }
 }
 
-/* React Flow – ComfyUI-style (blue handles, gray UI) */
+/* React Flow – ComfyUI-style (yellow handles, gray UI) */
 .react-flow__node {
   font-family: var(--font-raleway), system-ui, sans-serif;
 }
@@ -50,24 +50,24 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #3b82f6;
+  background: #eab308;
   border: 2px solid #1e293b;
   transition: all 0.2s ease;
 }
 
 .react-flow__handle:hover {
-  background: #60a5fa;
+  background: #facc15;
   transform: scale(1.1);
 }
 
 .react-flow__edge-path {
-  stroke: #3b82f6;
+  stroke: #eab308;
   stroke-width: 2;
   stroke-opacity: 0.85;
 }
 
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #60a5fa;
+  stroke: #facc15;
   stroke-width: 2.5;
 }
 
@@ -140,9 +140,9 @@
   display: none;
 }
 
-/* Node selected – subtle blue ring */
+/* Node selected – subtle yellow ring */
 .node-selected {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.5);
 }
 
 /* Panel Glass Effect */
@@ -161,19 +161,231 @@
   background-size: 20px 20px;
 }
 
-/* Pulsating blue ring for Run button */
+/* Pulsating yellow ring for Run button */
 @keyframes pulse-ring {
   0% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7);
   }
   70% {
-    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 8px rgba(234, 179, 8, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0);
   }
 }
 
 .animate-pulse-ring {
   animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Agent Sprite Animations */
+.agent-sprite {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+@keyframes agent-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes agent-dancing {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-4px) rotate(-2deg); }
+  75% { transform: translateY(-4px) rotate(2deg); }
+}
+
+@keyframes agent-active {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.05); }
+}
+
+.animate-agent-idle {
+  animation: agent-idle 1.5s ease-in-out infinite;
+}
+
+.animate-agent-dancing {
+  animation: agent-dancing 0.5s ease-in-out infinite;
+}
+
+.animate-agent-active {
+  animation: agent-active 0.8s ease-in-out infinite;
+}
+
+/* Show Set Animations */
+@keyframes fog {
+  0%, 100% { opacity: 0.3; transform: translateX(0); }
+  50% { opacity: 0.5; transform: translateX(20px); }
+}
+
+.animate-fog {
+  animation: fog 8s ease-in-out infinite;
+}
+
+@keyframes screen-flicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  93% { opacity: 0.7; }
+  94% { opacity: 1; }
+}
+
+.animate-screen-flicker {
+  animation: screen-flicker 4s infinite;
+}
+
+@keyframes scanline {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100vw); }
+}
+
+.animate-scanline {
+  animation: scanline 3s linear infinite;
+}
+
+@keyframes equalizer {
+  0%, 100% { height: 20%; }
+  50% { height: 100%; }
+}
+
+.animate-equalizer {
+  animation: equalizer 0.5s ease-in-out infinite;
+}
+
+@keyframes spotlight-sweep {
+  0%, 100% { transform: translateX(-20px) rotate(-5deg); opacity: 0.3; }
+  50% { transform: translateX(20px) rotate(5deg); opacity: 0.5; }
+}
+
+.animate-spotlight-sweep {
+  animation: spotlight-sweep 4s ease-in-out infinite;
+}
+
+@keyframes spotlight-sweep-reverse {
+  0%, 100% { transform: translateX(20px) rotate(5deg); opacity: 0.3; }
+  50% { transform: translateX(-20px) rotate(-5deg); opacity: 0.5; }
+}
+
+.animate-spotlight-sweep-reverse {
+  animation: spotlight-sweep-reverse 5s ease-in-out infinite;
+}
+
+@keyframes spotlight {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.5; }
+}
+
+.animate-spotlight {
+  animation: spotlight 2s ease-in-out infinite;
+}
+
+@keyframes particle {
+  0% { transform: translateY(100vh) scale(0); opacity: 0; }
+  10% { opacity: 0.5; }
+  90% { opacity: 0.5; }
+  100% { transform: translateY(-100vh) scale(1); opacity: 0; }
+}
+
+.animate-particle {
+  animation: particle 10s linear infinite;
+}
+
+/* Onboarding Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Show Display Animations */
+@keyframes light-sweep-0 {
+  0%, 100% { transform: translateX(-30px) skewX(-10deg); opacity: 0.4; }
+  50% { transform: translateX(30px) skewX(10deg); opacity: 0.7; }
+}
+
+@keyframes light-sweep-1 {
+  0%, 100% { transform: translateX(20px) skewX(5deg); opacity: 0.5; }
+  50% { transform: translateX(-20px) skewX(-5deg); opacity: 0.3; }
+}
+
+@keyframes light-sweep-2 {
+  0%, 100% { transform: translateX(-20px) skewX(-5deg); opacity: 0.4; }
+  50% { transform: translateX(40px) skewX(15deg); opacity: 0.6; }
+}
+
+@keyframes light-sweep-3 {
+  0%, 100% { transform: translateX(30px) skewX(10deg); opacity: 0.3; }
+  50% { transform: translateX(-30px) skewX(-10deg); opacity: 0.5; }
+}
+
+@keyframes light-sweep-4 {
+  0%, 100% { transform: translateX(-40px) skewX(-15deg); opacity: 0.5; }
+  50% { transform: translateX(20px) skewX(5deg); opacity: 0.4; }
+}
+
+@keyframes light-head-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+@keyframes light-flash {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.3); }
+}
+
+@keyframes laser-sweep {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 0.8; transform: translateY(10px); }
+}
+
+.animate-laser-sweep {
+  animation: laser-sweep 2s ease-in-out infinite;
+}
+
+@keyframes beamSweep {
+  0%, 100% { opacity: 0.3; transform: translateX(-20px) skewX(-6deg); }
+  50% { opacity: 0.75; transform: translateX(20px) skewX(6deg); }
+}
+
+@keyframes floodSway {
+  0%, 100% { transform: translateX(-50px); opacity: 0.6; }
+  50% { transform: translateX(50px); opacity: 0.9; }
+}
+
+@keyframes beamSwing {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+}
+
+@keyframes scanline {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes crowd-bounce {
+  0%, 100% { transform: translateY(0) translateX(var(--offset, 0px)); }
+  50% { transform: translateY(-15px) translateX(var(--offset, 0px)); }
+}
+
+.crowd-head {
+  --offset: 0px;
+  animation: crowd-bounce 0.8s ease-in-out infinite;
+  animation-delay: calc(var(--base-delay, 0s) + random() * 0.3s);
+}
+
+@keyframes fog-drift {
+  0%, 100% { transform: translateX(-10%) scaleY(1); opacity: 0.3; }
+  50% { transform: translateX(10%) scaleY(1.1); opacity: 0.5; }
+}
+
+@keyframes strobe {
+  0%, 100% { opacity: 0.02; }
+  50% { opacity: 0.08; }
 }

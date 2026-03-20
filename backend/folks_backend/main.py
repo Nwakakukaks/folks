@@ -8,7 +8,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routers import api, templates, github, ai, pipelines, plugins, sample_plugins
+from .routers import (
+    api,
+    templates,
+    github,
+    ai,
+    pipelines,
+    plugins,
+    sample_plugins,
+    outputs,
+    logs,
+)
 from .config import settings
 
 
@@ -51,6 +61,8 @@ app.include_router(github.router, prefix="/api/github")
 app.include_router(ai.router, prefix="/api/ai")
 app.include_router(pipelines.router, prefix="/api/scope")
 app.include_router(plugins.router, prefix="/api/scope")
+app.include_router(outputs.router, prefix="/api/scope")
+app.include_router(logs.router, prefix="/api/scope")
 app.include_router(sample_plugins.router, prefix="/api/sample-plugins")
 
 # Serve static files from frontend build

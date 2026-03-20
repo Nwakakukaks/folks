@@ -1,141 +1,98 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import Header from "@/components/Header";
-import NodePalette from "@/components/NodePalette";
-import NodeCanvas from "@/components/NodeCanvas";
-import PropertiesPanel from "@/components/PropertiesPanel";
-import TemplateModal from "@/components/TemplateModal";
-import AIAssistant from "@/components/AIAssistant";
-import SaveModal from "@/components/SaveModal";
-import OpenModal from "@/components/OpenModal";
+import MiniHeader from "@/components/MiniHeader";
+import ShowDisplay from "@/components/ShowDisplay";
 import AuthModal from "@/components/AuthModal";
-import TourModal, { hasSeenTour } from "@/components/TourModal";
-import { useGraphStore } from "@/store/graphStore";
-import { useWorkflows } from "@/hooks/useWorkflows";
+import OnboardingModal, { ShowSettings, loadSettings } from "@/components/OnboardingModal";
+import SetControlHub, { ActiveControlPanel } from "@/components/SetControlHub";
+import ControlDrawerContent, { getPanelTitle } from "@/components/ControlDrawerContent";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import HLSPlayer from "@/components/HLSPlayer";
 import { useScopeServer } from "@/hooks/useScopeServer";
 import { supabase } from "@/lib/supabase";
-import { showError, showWarning, showSuccess } from "@/lib/toast";
+import { Play } from "lucide-react";
 
-export default function Home() {
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [showAI, setShowAI] = useState(false);
-  const [showSave, setShowSave] = useState(false);
-  const [showOpen, setShowOpen] = useState(false);
-  const [showAuth, setShowAuth] = useState(false);
-  const [showTour, setShowTour] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [tourPropertiesPanel, setTourPropertiesPanel] = useState(false);
-  const [hasClickedRun, setHasClickedRun] = useState(false);
-  const hasRunInit = useRef(false);
+type ContentMode = "show" | "output";
+const HLS_URL = "https://nyc-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=955409166";
 
-  const hasSeenRunPrompt = typeof window !== "undefined" && localStorage.getItem("openscope_run_prompt") === "true";
+export default function AppPage() {
+  const [user, setUser] = useState<{ email?: string; avatar_url?: string } | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<ShowSettings | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [inputStream, setInputStream] = useState<MediaStream | null>(null);
+  const [contentMode, setContentMode] = useState<ContentMode>("show");
+  const [activePanel, setActivePanel] = useState<ActiveControlPanel>(null);
+  const outputVideoRef = useRef<HTMLVideoElement>(null);
+  const outputMainVideoRef = useRef<HTMLVideoElement>(null);
+  const inputStreamRef = useRef<MediaStream | null>(null);
 
-  useEffect(() => {
-    if (hasRunInit.current) return;
-    hasRunInit.current = true;
-    
-    const hasTour = hasSeenTour();
-    if (!hasTour) {
-      setShowTour(true);
-    } else {
-      loadDefaultWorkflow();
-      showSuccess("Ready to build!", "Click Run to preview or Clear to start fresh");
-    }
-  }, []);
-
-  useEffect(() => {
-    if (hasClickedRun && typeof window !== "undefined") {
-      localStorage.setItem("openscope_run_prompt", "true");
-    }
-  }, [hasClickedRun]);
-
-  const selectedNode = useGraphStore((state) => state.selectedNode);
-  const nodes = useGraphStore((state) => state.nodes);
-  const edges = useGraphStore((state) => state.edges);
-  const addOutputNode = useGraphStore((state) => state.addOutputNode);
-  const loadDefaultWorkflow = useGraphStore((state) => state.loadDefaultWorkflow);
-
-  const { saveWorkflow, loading: saveLoading } = useWorkflows();
   const {
-    isConnected: isScopeConnected,
+    isConnected,
     isConnecting,
-    pipelineStatus,
-    loadPipeline,
     startWebRTC,
     stopWebRTC,
-    connectToCloud,
+    loadPipeline,
+    pipelines,
+    fetchPipelines,
+    activePipeline,
+    configSchema,
+    isLoadingPipeline,
     sendParameterUpdate,
   } = useScopeServer();
 
-  const [user, setUser] = useState<{ email?: string; avatar_url?: string } | null>(null);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [selectedPipeline, setSelectedPipeline] = useState<string>("");
 
-  const videoElementRef = useRef<HTMLVideoElement | null>(null);
-
-  const handleVideoUploadFromFile = useCallback(async (file: File) => {
-    // Clean up previous video element if exists
-    if (videoElementRef.current) {
-      videoElementRef.current.pause();
-      videoElementRef.current.src = '';
-      videoElementRef.current = null;
-    }
-
-    // Create video element to play the file (like Scope does)
-    const video = document.createElement('video');
-    video.src = URL.createObjectURL(file);
-    video.muted = true;
-    video.playsInline = true;
-    video.loop = true; // Loop the video continuously
-    video.autoplay = true;
-    videoElementRef.current = video;
-
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error('Failed to load video'));
-    });
-
-    // Create canvas matching video resolution
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-
-    if (!ctx) {
-      throw new Error('Failed to get canvas context');
-    }
-
-    // Start video playback
-    await video.play();
-
-    // Continuous frame capture at 15fps (like Scope)
-    const FPS = 15;
-    const stream = canvas.captureStream(FPS);
-
-    // Draw frames continuously using requestAnimationFrame
-    const drawFrame = () => {
-      if (videoElementRef.current && ctx) {
-        ctx.drawImage(videoElementRef.current, 0, 0, canvas.width, canvas.height);
-      }
-      requestAnimationFrame(drawFrame);
-    };
-    drawFrame();
-
-    setLocalStream(stream);
+  const handlePipelineChange = useCallback((pipelineId: string) => {
+    setSelectedPipeline(pipelineId);
   }, []);
 
+  const handleLoadPipeline = useCallback(() => {
+    if (selectedPipeline) {
+      loadPipeline([selectedPipeline]);
+    }
+  }, [selectedPipeline, loadPipeline]);
+
+  const handleParamChange = useCallback((key: string, value: any) => {
+    sendParameterUpdate({ [key]: value });
+  }, [sendParameterUpdate]);
+
+  // Fetch pipelines on mount
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    fetchPipelines();
+  }, [fetchPipelines]);
+
+  useEffect(() => {
+    if (outputVideoRef.current && remoteStream) {
+      outputVideoRef.current.srcObject = remoteStream;
+    }
+    if (outputMainVideoRef.current && remoteStream) {
+      outputMainVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
+  useEffect(() => {
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUser({
           email: user.email,
           avatar_url: user.user_metadata?.avatar_url,
         });
+      } else {
+        const isGuestUser = localStorage.getItem("aifolks_guest") === "true";
+        if (isGuestUser) {
+          setUser({ email: "guest@aifolks.local" });
+        } else {
+          setShowAuthModal(true);
+        }
       }
-    });
+    };
+
+    checkUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
@@ -143,309 +100,249 @@ export default function Home() {
           email: session.user.email,
           avatar_url: session.user.user_metadata?.avatar_url,
         });
-      } else {
-        setUser(null);
+        setShowAuthModal(false);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Listen for video stream ready events from nodes
   useEffect(() => {
-    const handleVideoStreamReady = (event: Event) => {
-      const customEvent = event as CustomEvent<{ stream: MediaStream; nodeId: string }>;
-
-      setLocalStream(customEvent.detail.stream);
-    };
-
-    window.addEventListener('openscope:video-stream-ready', handleVideoStreamReady);
-    return () => {
-      window.removeEventListener('openscope:video-stream-ready', handleVideoStreamReady);
-    };
-  }, []);
-
-  // Listen for AI assistant open request
-  useEffect(() => {
-    const handleOpenAI = () => {
-      setShowAI(true);
-    };
-
-    window.addEventListener('openscope:open-ai-assistant', handleOpenAI);
-    return () => {
-      window.removeEventListener('openscope:open-ai-assistant', handleOpenAI);
-    };
-  }, []);
-
-  const handleSave = async (name: string, description: string) => {
-    await saveWorkflow(name, description);
-  };
-
-  const handleStartStream = useCallback(async () => {
-    if (!isScopeConnected) {
-      showWarning("Scope server not connected", "Please ensure Scope server is running");
-      return;
+    if (user && !showAuthModal) {
+      const savedSettings = loadSettings();
+      if (savedSettings.completed) {
+        setSettings(savedSettings);
+        if (savedSettings.inputType !== "none" && inputStream) {
+          connectToScope(inputStream);
+        }
+      } else {
+        setShowOnboarding(true);
+      }
     }
+  }, [user, showAuthModal, inputStream]);
 
+  const connectToScope = useCallback(async (stream?: MediaStream | null) => {
     try {
-      setIsLoading(true);
-
-      const pluginConfig = nodes.find(n => n.data.type === "pluginConfig");
-
-      // Get pipeline node - this is where the main pipeline is defined
-      const pipelineNode = nodes.find(n => n.data.type === "pipeline");
-      const pipelineId = pipelineNode?.data?.config?.pipelineId as string ||
-        pluginConfig?.data?.config?.pipelineId as string ||
-        "passthrough";
-
-      // Get any processor-specific config from the pipeline node
-      const pipelineConfig = pipelineNode?.data?.config || {};
-
-      const mode = pluginConfig?.data?.config?.mode as string || "video";
-      const remoteInference = pluginConfig?.data?.config?.remoteInference as boolean ?? false;
-      const supportsPrompts = pluginConfig?.data?.config?.supportsPrompts as boolean ?? false;
-
-      // Legacy: still check for standalone processor nodes (not using pipeline as processor)
-      const processorNodeTypes = ['kaleidoscope', 'yoloMask', 'bloom', 'cosmicVFX', 'vfxPack'];
-      const processorNodes = nodes.filter(n => processorNodeTypes.includes(n.data.type));
-
-      // Map node types to their pipeline IDs (for legacy standalone processors)
-      const processorPipelineIds: Record<string, string> = {
-        'kaleidoscope': 'kaleido-scope-pre',
-        'yoloMask': 'yolo-mask',
-        'bloom': 'bloom',
-        'cosmicVFX': 'cosmic-vfx',
-        'vfxPack': 'vfx-pack',
-      };
-
-      // Check and install required plugins
-      for (const node of processorNodes) {
-        const processorType = node.data.type as string;
-        try {
-          const checkRes = await fetch(`/api/scope/plugins/check/${processorType}`);
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            if (!checkData.installed) {
-              console.log(`[OpenScope] Installing plugin for ${processorType}...`);
-              const installRes = await fetch(`/api/scope/plugins/install/${processorType}`, {
-                method: 'POST',
-              });
-              if (installRes.ok) {
-                const installData = await installRes.json();
-                console.log(`[OpenScope] ${installData.message}`);
-              } else {
-                console.error(`[OpenScope] Failed to install plugin for ${processorType}`);
-              }
-            } else {
-              console.log(`[OpenScope] Plugin already installed for ${processorType}`);
-            }
-          }
-        } catch (err) {
-          console.error(`[OpenScope] Error checking/installing plugin for ${processorType}:`, err);
-        }
-      }
-
-      const pipeline_ids = [
-        ...processorNodes.map(n => processorPipelineIds[n.data.type]).filter(Boolean),
-        pipelineId,
-      ];
-
-      // Get input nodes
-      const videoInputNode = nodes.find(n => n.data.type === "videoInput");
-      const textPromptNodes = nodes.filter(n => n.data.type === "textPrompt");
-      const imageInputNodes = nodes.filter(n => n.data.type === "imageInput");
-
-      // If remote inference is enabled, connect to cloud first
-      if (remoteInference) {
-        try {
-          await connectToCloud();
-        } catch (cloudErr) {
-          console.warn("Cloud connection failed, continuing anyway:", cloudErr);
-        }
-      }
-
-      // Include pipeline config parameters when loading pipeline
-      await loadPipeline([pipelineId], { remoteInference, ...pipelineConfig });
-
-      // Build prompts array from textPrompt nodes
-      const prompts = textPromptNodes.map(node => ({
-        text: (node.data.config?.text as string) || "",
-        weight: (node.data.config?.weight as number) || 1,
-      }));
-
-
-      // Build initial parameters
       const initialParameters: Record<string, unknown> = {
-        input_mode: mode,
-        prompt_interpolation_method: "linear",
-        noise_scale: 0.7,
-        noise_controller: true,
-        vace_context_scale: 1.0,
-        pipeline_ids: pipeline_ids,
-        recording: false,
+        input_mode: settings?.inputType === "audio" ? "audio" : "video",
+        pipeline_ids: ["passthrough"],
       };
 
-      // Add prompts if available
-      if (supportsPrompts && prompts.length > 0) {
-        initialParameters.prompts = prompts;
-      }
+      await loadPipeline(["passthrough"], { input_mode: settings?.inputType });
 
-      // Add reference images if available
-      if (imageInputNodes.length > 0) {
-        const images = imageInputNodes
-          .map(n => n.data.config?.path as string)
-          .filter(Boolean);
-        if (images.length > 0) {
-          initialParameters.images = images;
-        }
-      }
-
-
-
-      // Validate: must have input node in canvas
-      const hasInput = nodes.some(n =>
-        n.data.type === "videoInput" ||
-        n.data.type === "imageInput" ||
-        n.data.type === "textPrompt"
+      await startWebRTC(
+        (stream) => {
+          setRemoteStream(stream);
+        },
+        initialParameters,
+        stream ?? null
       );
-
-      if (!hasInput) {
-        showError("Missing input node", "Add an input node (Video, Image, or Text) to your workflow before running");
-        setIsLoading(false);
-        return;
-      }
-
-      // Validate: must have output node in canvas
-      const hasOutput = nodes.some(n =>
-        n.data.type === "pipelineOutput" ||
-        n.data.type?.startsWith("pipeline_")
-      );
-
-      if (!hasOutput) {
-        showError("Missing output node", "Add a pipeline output node to your workflow before running");
-        setIsLoading(false);
-        return;
-      }
-
-      // Check if video input has uploaded content or webcam
-      const hasVideoInput = localStream || (videoInputNode?.data?.config?.videoPreviewUrl as string);
-
-      if (!hasVideoInput) {
-        showWarning("No video input", "Please upload a video in the Video Input node first");
-        setIsLoading(false);
-        return;
-      }
-
-      // Create stream from preloaded video URL if no localStream
-      let streamToUse = localStream;
-      if (!streamToUse && videoInputNode?.data?.config?.videoPreviewUrl) {
-        try {
-          const videoUrl = videoInputNode.data.config.videoPreviewUrl as string;
-          const video = document.createElement("video");
-          video.src = videoUrl;
-          video.muted = true;
-          video.playsInline = true;
-          video.crossOrigin = "anonymous";
-          await video.play();
-          streamToUse = (video as HTMLVideoElement & { captureStream: (frameRate?: number) => MediaStream }).captureStream(30);
-        } catch (err) {
-          console.error("Failed to create stream from video URL:", err);
-        }
-      }
-
-      // Start WebRTC - localStream will be sent if user uploaded video in Preview panel
-      await startWebRTC((stream) => {
-        setRemoteStream(stream);
-        setIsStreaming(true);
-      }, initialParameters, streamToUse);
-
-    } catch (err) {
-      console.error("Failed to start stream:", err);
-      showError("Failed to start stream", err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setIsLoading(false);
+    } catch (error) {
+      console.error("Scope connection error:", error);
     }
-  }, [isScopeConnected, nodes, loadPipeline, startWebRTC, connectToCloud]);
+  }, [settings?.inputType, loadPipeline, startWebRTC]);
 
-  const handleStopStream = useCallback(() => {
+  const disconnectFromScope = useCallback(() => {
     stopWebRTC();
-    setIsStreaming(false);
     setRemoteStream(null);
   }, [stopWebRTC]);
 
-  return (
-    <div className="h-screen w-screen flex flex-col bg-background overflow-hidden">
-      <Header
-        onOpenTemplates={() => setShowTemplates(true)}
-        onOpenSave={() => setShowSave(true)}
-        onOpenOpen={() => setShowOpen(true)}
-        onOpenAI={() => setShowAI(true)}
-        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-        sidebarOpen={sidebarOpen}
-        user={user}
-        onAuthClick={() => setShowAuth(true)}
-        isScopeConnected={isScopeConnected}
-        isStreaming={isStreaming}
-        onStartStream={handleStartStream}
-        onStopStream={handleStopStream}
-        showRunPrompt={!hasSeenRunPrompt}
-        onRunClick={() => setHasClickedRun(true)}
-        onClearClick={() => setHasClickedRun(true)}
-      />
-      <div className="flex-1 flex min-h-0 w-full relative">
-        {sidebarOpen && <NodePalette />}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          <NodeCanvas
-            localStream={localStream}
-            remoteStream={remoteStream}
-            isStreaming={isStreaming}
-            sendParameterUpdate={sendParameterUpdate}
-          />
+  const handleAuthSuccess = (isGuestMode?: boolean) => {
+    if (isGuestMode) {
+      setUser({ email: "guest@aifolks.local" });
+    }
+    setShowAuthModal(false);
+  };
 
+  const handleOnboardingComplete = (newSettings: ShowSettings) => {
+    setSettings(newSettings);
+    setShowOnboarding(false);
+    if (newSettings.inputType !== "none" && inputStream) {
+      connectToScope(inputStream);
+    }
+  };
+
+  const handleSettingsClose = () => {
+    setShowSettings(false);
+  };
+
+  const handleSettingsUpdate = (newSettings: ShowSettings) => {
+    setSettings(newSettings);
+    setShowSettings(false);
+  };
+
+  const handleInputStreamReady = useCallback(
+    async (stream: MediaStream) => {
+      setInputStream(stream);
+
+      if (inputStreamRef.current === stream) {
+        return;
+      }
+      inputStreamRef.current = stream;
+
+      if ((settings?.inputType ?? "video") !== "none") {
+        await connectToScope(stream);
+      }
+    },
+    [connectToScope, settings?.inputType],
+  );
+
+  const drawerPanel = activePanel;
+  const pipelineOptions = Object.fromEntries(
+    Object.entries(pipelines || {}).map(([id, info]) => [
+      id,
+      {
+        name: (info as { pipeline_name?: string }).pipeline_name || id,
+        description: (info as { pipeline_description?: string }).pipeline_description,
+      },
+    ]),
+  );
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-black overflow-hidden">
+      <MiniHeader
+        user={user}
+        mode={contentMode}
+        onModeChange={setContentMode}
+        onAuthClick={() => setShowAuthModal(true)}
+      />
+
+      <div className="flex-1 flex pt-16 min-h-0 relative">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+          {contentMode === "show" ? (
+            <div className="relative flex-1 overflow-hidden">
+              <div className="absolute inset-0 z-0">
+                <ShowDisplay />
+              </div>
+
+              <div className="absolute inset-0 z-10 bg-gradient-to-b from-black/10 via-transparent to-black/35 pointer-events-none" />
+
+              <div className="absolute bottom-32 inset-x-0 z-20 px-6">
+                <div className="mx-auto w-[min(980px,92vw)] space-y-3">
+                  <div className="grid w-full gap-3 md:grid-cols-2">
+                    <div className="h-[280px] overflow-hidden rounded-xl border border-cyan-300/20 bg-black/55 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+                      {remoteStream ? (
+                        <video
+                          ref={outputVideoRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-white/40">
+                          <div className="text-center">
+                            <Play className="mx-auto mb-3 h-10 w-10" />
+                            <p className="text-xs uppercase tracking-[0.25em]">No Output Stream</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="h-[280px] overflow-hidden rounded-xl border border-pink-300/20 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
+                      <HLSPlayer
+                        src={HLS_URL}
+                        onStreamReady={handleInputStreamReady}
+                        className="h-full w-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/40 p-3 backdrop-blur-md">
+                    <SetControlHub
+                      activePanel={activePanel}
+                      onPanelChange={setActivePanel}
+                      settings={settings}
+                      isConnected={isConnected}
+                      activePipeline={activePipeline || selectedPipeline}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="relative flex-1 overflow-hidden px-6 pb-8 pt-4">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(34,211,238,0.18),transparent_55%)]" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_78%_12%,rgba(236,72,153,0.18),transparent_55%)]" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_85%,rgba(168,85,247,0.22),transparent_62%)]" />
+              <div className="absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-white/10 via-white/5 to-transparent" />
+
+              <div className="relative mx-auto h-full w-full max-w-[1200px]">
+                <div className="relative mx-auto h-[85vh] min-h-[380px] overflow-hidden rounded-2xl border border-white/10 bg-black/85">
+                  {remoteStream ? (
+                    <video
+                      ref={outputMainVideoRef}
+                      autoPlay
+                      muted
+                      playsInline
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-white/40">
+                      <div className="text-center">
+                        <Play className="mx-auto mb-3 h-10 w-10" />
+                        <p className="text-xs uppercase tracking-[0.25em]">No Output Stream</p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute bottom-4 right-4 z-30 h-48 w-72 overflow-hidden rounded-lg border-2 border-white/30 bg-black shadow-xl pointer-events-auto">
+                    <HLSPlayer
+                      src={HLS_URL}
+                      onStreamReady={handleInputStreamReady}
+                      className="h-full w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-        {selectedNode || tourPropertiesPanel ? <PropertiesPanel forceShow={tourPropertiesPanel} sendParameterUpdate={sendParameterUpdate} isStreaming={isStreaming} /> : null}
       </div>
 
-      {/* Modals */}
-      <TemplateModal
-        isOpen={showTemplates}
-        onClose={() => setShowTemplates(false)}
-      />
-
-      <SaveModal
-        isOpen={showSave}
-        onClose={() => setShowSave(false)}
-        onSave={handleSave}
-        loading={saveLoading}
-      />
-
-      <OpenModal
-        isOpen={showOpen}
-        onClose={() => setShowOpen(false)}
-      />
-
-      <AIAssistant
-        isOpen={showAI}
-        onClose={() => setShowAI(false)}
-      />
+      <Sheet open={!!drawerPanel} onOpenChange={(open) => !open && setActivePanel(null)}>
+        <SheetContent onClose={() => setActivePanel(null)}>
+          {drawerPanel && (
+            <>
+              <SheetHeader>
+                <SheetTitle>{getPanelTitle(drawerPanel)}</SheetTitle>
+              </SheetHeader>
+              <ControlDrawerContent
+                panel={drawerPanel}
+                settings={settings}
+                onSettingsChange={setSettings}
+                isConnected={isConnected}
+                isConnecting={isConnecting}
+                onConnect={connectToScope}
+                onDisconnect={disconnectFromScope}
+                pipelines={pipelineOptions}
+                activePipeline={activePipeline || selectedPipeline}
+                onPipelineChange={handlePipelineChange}
+                onLoadPipeline={handleLoadPipeline}
+                isLoadingPipeline={isLoadingPipeline}
+                configSchema={configSchema}
+                onParamChange={handleParamChange}
+                sendParameterUpdate={sendParameterUpdate}
+              />
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
 
       <AuthModal
-        isOpen={showAuth}
-        onClose={() => setShowAuth(false)}
-        onAuthSuccess={() => { }}
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onAuthSuccess={handleAuthSuccess}
       />
 
-      <TourModal
-        isOpen={showTour}
-        onClose={() => {
-          setShowTour(false);
-          loadDefaultWorkflow();
-        }}
-        onComplete={() => {
-          setShowTour(false);
-          loadDefaultWorkflow();
-        }}
-        onStepChange={(step) => setTourPropertiesPanel(step !== null)}
+      <OnboardingModal
+        isOpen={showOnboarding}
+        onClose={() => setShowOnboarding(false)}
+        onComplete={handleOnboardingComplete}
+      />
+
+      <OnboardingModal
+        isOpen={showSettings}
+        onClose={handleSettingsClose}
+        onComplete={handleSettingsUpdate}
       />
     </div>
   );

@@ -19,6 +19,28 @@ export interface PipelineInfo {
   config_schema?: Record<string, unknown>;
 }
 
+export interface PluginInfo {
+  name: string;
+  version: string;
+  source: string;
+  pipelines: string[];
+}
+
+export interface OutputStatus {
+  ndi: {
+    available: boolean;
+    enabled: boolean;
+    name: string;
+    connected: boolean;
+  };
+}
+
+export interface LogEntry {
+  timestamp: string;
+  source: string;
+  message: string;
+}
+
 export interface IceServer {
   urls: string;
   username?: string;
@@ -65,6 +87,11 @@ export function useScopeServer() {
     null,
   );
   const [cloudStatus, setCloudStatus] = useState<CloudStatus | null>(null);
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [outputStatus, setOutputStatus] = useState<OutputStatus | null>(null);
+  const [activePipeline, setActivePipeline] = useState<string | null>(null);
+  const [configSchema, setConfigSchema] = useState<Record<string, any> | null>(null);
+  const [isLoadingPipeline, setIsLoadingPipeline] = useState(false);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -100,11 +127,109 @@ export function useScopeServer() {
         `${getBackendUrl()}${SCOPE_API_URL}/pipelines`,
       );
       const data = await response.json();
-      setPipelines(data.pipelines || {});
-      return data.pipelines;
+      const pipelinesData = data.pipelines || {};
+      setPipelines(pipelinesData);
+      
+      // Also fetch plugins
+      fetchPlugins();
+      
+      return pipelinesData;
     } catch (err) {
       console.error("Failed to fetch pipelines:", err);
       return null;
+    }
+  }, []);
+
+  const fetchPlugins = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `${getBackendUrl()}${SCOPE_API_URL}/plugins`,
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setPlugins(data.plugins || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch plugins:", err);
+    }
+  }, []);
+
+  const installPlugin = useCallback(async (spec: string) => {
+    const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/plugins`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spec }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to install plugin");
+    }
+    await fetchPlugins();
+    return response.json();
+  }, [fetchPlugins]);
+
+  const uninstallPlugin = useCallback(async (name: string) => {
+    const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/plugins/${name}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to uninstall plugin");
+    }
+    await fetchPlugins();
+  }, [fetchPlugins]);
+
+  const reloadPlugin = useCallback(async (name: string) => {
+    const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/plugins/${name}/reload`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to reload plugin");
+    }
+    await fetchPlugins();
+    await fetchPipelines();
+  }, [fetchPlugins, fetchPipelines]);
+
+  const configureNDI = useCallback(async (enabled: boolean, name: string) => {
+    const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/outputs/ndi`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, name }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to configure NDI");
+    }
+    return response.json();
+  }, []);
+
+  const getOutputStatus = useCallback(async () => {
+    const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/outputs/ndi`);
+    if (response.ok) {
+      const data = await response.json();
+      setOutputStatus({ ndi: data });
+      return data;
+    }
+    return null;
+  }, []);
+
+  const fetchLogs = useCallback(async (lines: number = 200, offset: number = 0) => {
+    try {
+      const response = await fetch(
+        `${getBackendUrl()}${SCOPE_API_URL}/logs?lines=${lines}&since_offset=${offset}`,
+      );
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          lines: data.lines || [],
+          offset: data.offset || 0,
+        };
+      }
+      return { lines: [], offset: 0 };
+    } catch (err) {
+      console.error("Failed to fetch logs:", err);
+      return { lines: [], offset: 0 };
     }
   }, []);
 
@@ -129,7 +254,18 @@ export function useScopeServer() {
       waitForLoad: boolean = true,
     ) => {
       try {
+        setIsLoadingPipeline(true);
         setPipelineStatus({ status: "loading" });
+        
+        // Set active pipeline and fetch its schema
+        const mainPipeline = pipelineIds[pipelineIds.length - 1];
+        setActivePipeline(mainPipeline);
+        
+        // Fetch config schema for the main pipeline
+        if (pipelines[mainPipeline]?.config_schema) {
+          setConfigSchema(pipelines[mainPipeline].config_schema as Record<string, any>);
+        }
+
         const response = await fetch(
           `${getBackendUrl()}${SCOPE_API_URL}/pipeline/load`,
           {
@@ -162,7 +298,7 @@ export function useScopeServer() {
 
         // If waitForLoad is true, poll until pipeline is loaded
         if (waitForLoad) {
-          const maxTimeout = 1200000; // 20 minutes
+          const maxTimeout = 120000; // 2 minutes
           const pollInterval = 1000;
           const startTime = Date.now();
 
@@ -175,17 +311,22 @@ export function useScopeServer() {
             setPipelineStatus(statusData);
 
             if (statusData.status === "loaded") {
+              setIsLoadingPipeline(false);
               return statusData;
             } else if (statusData.status === "error") {
+              setIsLoadingPipeline(false);
               throw new Error(statusData.error || "Pipeline load failed");
             }
           }
+          setIsLoadingPipeline(false);
           throw new Error("Pipeline load timeout after 2 minutes");
         }
 
         const data = await response.json();
+        setIsLoadingPipeline(false);
         return data;
       } catch (err) {
+        setIsLoadingPipeline(false);
         console.error("Failed to load pipeline:", err);
         setPipelineStatus({
           status: "error",
@@ -194,7 +335,7 @@ export function useScopeServer() {
         throw err;
       }
     },
-    [],
+    [pipelines],
   );
 
   const getCloudStatus = useCallback(async () => {
@@ -367,7 +508,7 @@ export function useScopeServer() {
             );
           }
           if (event.candidate && sessionIdRef.current) {
-            const iceUrl = `${getBackendUrl()}/api/scope/webrtc/ice?session_id=${sessionIdRef.current}`;
+            const iceUrl = `${getBackendUrl()}${SCOPE_API_URL}/webrtc/ice?session_id=${sessionIdRef.current}`;
             console.log("[OpenScope] Sending ICE candidate to:", iceUrl);
             fetch(iceUrl, {
               method: "POST",
@@ -497,8 +638,14 @@ export function useScopeServer() {
     pipelines,
     pipelineStatus,
     cloudStatus,
+    plugins,
+    outputStatus,
+    activePipeline,
+    configSchema,
+    isLoadingPipeline,
     checkConnection,
     fetchPipelines,
+    fetchPlugins,
     getPipelineStatus,
     loadPipeline,
     getCloudStatus,
@@ -507,6 +654,12 @@ export function useScopeServer() {
     startWebRTC,
     stopWebRTC,
     sendParameterUpdate,
+    installPlugin,
+    uninstallPlugin,
+    reloadPlugin,
+    configureNDI,
+    getOutputStatus,
+    fetchLogs,
     remoteStream: remoteStreamRef.current,
   };
 }

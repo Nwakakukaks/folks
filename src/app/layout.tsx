@@ -5,8 +5,8 @@ import { PipelineSchemasProvider } from "@/context/PipelineSchemasContext";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OpenScope - Visual Plugin Builder",
-  description: "Build Scope plugins visually with nodes",
+  title: "The AI Folks - 24/7 AI VJ Show",
+  description: "A 24/7 AI VJ show powered by Daydream Scope.",
 };
 
 const raleway = Raleway({

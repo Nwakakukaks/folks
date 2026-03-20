@@ -200,6 +200,27 @@ async def install_processor_plugin(processor_type: str):
             raise HTTPException(status_code=503, detail="Scope server not available")
 
 
+@router.post("/plugins/{plugin_name}/reload")
+async def reload_plugin(plugin_name: str, force: bool = False):
+    """Reload an editable plugin for development (without server restart)."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                f"{settings.scope_api_url}/api/v1/plugins/{plugin_name}/reload",
+                json={"force": force},
+            )
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to reload plugin: {response.text}",
+                )
+            return response.json()
+        except httpx.ConnectError:
+            raise HTTPException(status_code=503, detail="Scope server not available")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/restart")
 async def restart_server():
     """Restart the Scope server to pick up new plugins."""
