@@ -273,7 +273,7 @@ export default function AgentSprite({
   );
 }
 
-function AgentHead({
+export function AgentHead({
   agent,
   isActive,
   isDancing,
