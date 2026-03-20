@@ -220,11 +220,10 @@ function InputPanel({
               startVideo();
             }
           }}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${
-            videoEnabled
-              ? "border-green-500/60 bg-green-500/20 text-green-400"
-              : "border-white/10 hover:border-white/30 text-white/70"
-          }`}
+          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${videoEnabled
+            ? "border-green-500/60 bg-green-500/20 text-green-400"
+            : "border-white/10 hover:border-white/30 text-white/70"
+            }`}
         >
           <Camera className="h-4 w-4" />
           <span className="text-[10px] uppercase tracking-wider">Video</span>
@@ -232,11 +231,10 @@ function InputPanel({
 
         <button
           onClick={() => setAudioEnabled(!audioEnabled)}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${
-            audioEnabled
-              ? "border-green-500/60 bg-green-500/20 text-green-400"
-              : "border-white/10 hover:border-white/30 text-white/70"
-          }`}
+          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${audioEnabled
+            ? "border-green-500/60 bg-green-500/20 text-green-400"
+            : "border-white/10 hover:border-white/30 text-white/70"
+            }`}
         >
           <Music className="h-4 w-4" />
           <span className="text-[10px] uppercase tracking-wider">Audio</span>
@@ -372,7 +370,7 @@ function PipelinePanel({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Active Pipeline</div>
+      <div className="text-[10px] uppercase tracking-wider text-white/50 ">Active Pipeline</div>
 
       <select
         value={activePipeline || ""}
@@ -393,13 +391,9 @@ function PipelinePanel({
         </div>
       )}
 
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t border-white/10" />
-        </div>
-      </div>
 
-      <div className="space-y-3">
+
+      <div className="space-y-3 mt-3">
         <div>
           <label className="text-[10px] uppercase tracking-wider text-white/50 mb-1 block">Preprocessor</label>
           <select
@@ -496,14 +490,12 @@ function OutputPanel({ isConnected }: { isConnected: boolean }) {
           </div>
           <button
             onClick={handleNdiToggle}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              ndiEnabled ? "bg-green-500" : "bg-white/20"
-            }`}
+            className={`relative h-5 w-9 rounded-full transition-colors ${ndiEnabled ? "bg-green-500" : "bg-white/20"
+              }`}
           >
             <span
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                ndiEnabled ? "left-4" : "left-0.5"
-              }`}
+              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${ndiEnabled ? "left-4" : "left-0.5"
+                }`}
             />
           </button>
         </div>
@@ -521,9 +513,8 @@ function OutputPanel({ isConnected }: { isConnected: boolean }) {
 
         <div className="mt-3 flex items-center gap-2">
           <span
-            className={`h-2 w-2 rounded-full ${
-              ndiStatus === "connected" ? "bg-green-500" : "bg-red-500"
-            }`}
+            className={`h-2 w-2 rounded-full ${ndiStatus === "connected" ? "bg-green-500" : "bg-red-500"
+              }`}
           />
           <span className="text-[9px] uppercase tracking-wider text-white/50">
             {ndiStatus === "connected" ? "Connected" : "Disconnected"}
@@ -569,9 +560,8 @@ function ControlsPanel({
           className={`h-5 w-9 rounded-full transition-colors ${value ? "bg-yellow-500" : "bg-white/20"}`}
         >
           <span
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              value ? "left-4" : "left-0.5"
-            }`}
+            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${value ? "left-4" : "left-0.5"
+              }`}
             style={{ position: "relative" }}
           />
         </button>
@@ -632,40 +622,7 @@ function ControlsPanel({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Stream Controls</div>
-
-      <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          {isConnected ? (
-            <Wifi className="h-4 w-4 text-green-400" />
-          ) : (
-            <WifiOff className="h-4 w-4 text-red-400" />
-          )}
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-white/50">Scope Link</div>
-            <div className={`text-[11px] font-medium ${isConnected ? "text-green-400" : "text-red-400"}`}>
-              {isConnecting ? "Connecting..." : isConnected ? "Connected" : "Offline"}
-            </div>
-          </div>
-        </div>
-        {isConnected ? (
-          <button
-            onClick={onDisconnect}
-            className="rounded-full border border-white/20 px-3 py-1.5 text-[9px] uppercase tracking-wider text-white/70 hover:border-white/40"
-          >
-            Disconnect
-          </button>
-        ) : (
-          <button
-            onClick={onConnect}
-            disabled={isConnecting}
-            className="rounded-full border border-yellow-500/60 bg-yellow-500/20 px-3 py-1.5 text-[9px] uppercase tracking-wider text-yellow-200 hover:bg-yellow-500/30 disabled:opacity-50"
-          >
-            Connect
-          </button>
-        )}
-      </div>
-
+      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Stream Configs</div>
       {configSchema && (
         <div className="space-y-3">
           <div className="text-[10px] uppercase tracking-wider text-white/50">Parameters</div>
@@ -708,11 +665,10 @@ function AgentPanel({
           <button
             key={agent.name}
             onClick={() => onSettingsChange({ agent: agent.name })}
-            className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-all w-full ${
-              isActive
-                ? "border-yellow-500/60 bg-yellow-500/10"
-                : "border-white/10 hover:border-white/30"
-            }`}
+            className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-all w-full ${isActive
+              ? "border-yellow-500/60 bg-yellow-500/10"
+              : "border-white/10 hover:border-white/30"
+              }`}
           >
             <div className="relative">
               <svg
