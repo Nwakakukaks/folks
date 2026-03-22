@@ -45,16 +45,39 @@ const showTemplate = [
   { time: "5PM - 6PM", title: "Hardware Hour", genre: "Industrial, Live" },
 ];
 
-const scheduleDays = [
-  { day: "Friday", date: "03.20.2026" },
-  { day: "Saturday", date: "03.21.2026" },
-  { day: "Sunday", date: "03.22.2026" },
-  { day: "Monday", date: "03.23.2026" },
-  { day: "Tuesday", date: "03.24.2026" },
-  { day: "Wednesday", date: "03.25.2026" },
-];
+const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const weeklySchedule = scheduleDays.map((day, dayIndex) => ({
+interface ScheduleDay {
+  day: string;
+  date: string;
+}
+
+function generateScheduleDays(startDaysAhead: number = 0): ScheduleDay[] {
+  const days: ScheduleDay[] = [];
+  const today = new Date();
+  
+  for (let i = startDaysAhead; i < startDaysAhead + 6; i++) {
+    const date = new Date(today);
+    date.setDate(today.getDate() + i);
+    
+    const dayName = DAYS_OF_WEEK[date.getDay()];
+    const month = MONTHS[date.getMonth()];
+    const dayOfMonth = String(date.getDate()).padStart(2, "0");
+    const year = date.getFullYear();
+    
+    days.push({
+      day: dayName,
+      date: `${month}.${dayOfMonth}.${year}`,
+    });
+  }
+  
+  return days;
+}
+
+const scheduleDays = generateScheduleDays(0);
+
+const weeklySchedule = scheduleDays.map((day: ScheduleDay, dayIndex: number) => ({
   ...day,
   slots: showTemplate.map((slot, slotIndex) => ({
     ...slot,
@@ -103,11 +126,17 @@ export default function Home() {
   };
 
   const callAgentReasoning = useCallback(async () => {
-    if (!audioStreamRef.current || !isAgentActive) return;
+    if (!audioStreamRef.current || !isAgentActive) {
+      console.log("[Agent] Skipping reasoning - audioStream:", !!audioStreamRef.current, "isActive:", isAgentActive);
+      return;
+    }
 
     const agentName = currentAgent.toLowerCase();
+    console.log(`[Agent] ${agentName} reasoning cycle starting...`);
+    console.log(`[Agent] Audio metrics:`, JSON.stringify(audioMetrics, null, 2));
 
     try {
+      console.log("[Agent] Sending reasoning request to /api/agents/reason");
       const response = await fetch("/api/agents/reason", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -132,30 +161,40 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        console.error("Agent reasoning failed:", response.status);
+        const errorText = await response.text();
+        console.error(`[Agent] Reasoning failed: ${response.status} - ${errorText}`);
         return;
       }
 
       const result = await response.json();
+      console.log("[Agent] Reasoning response:", JSON.stringify(result, null, 2));
 
       if (result.mood) {
+        console.log(`[Agent] Mood changed to: ${result.mood}`);
         setCurrentMood(result.mood);
       }
 
       if (result.actions) {
+        console.log(`[Agent] Processing ${result.actions.length} actions`);
         for (const action of result.actions) {
           if (action.type === "send_prompt" && action.prompt) {
+            console.log(`[Agent] Action: send_prompt - "${action.prompt.substring(0, 50)}..."`);
             setAgentPrompt(action.prompt);
+            console.log("[Scope] Sending prompt to server...");
             sendParameterUpdate({
               prompts: [{ text: action.prompt, weight: 1.0 }],
             });
           } else if (action.type === "select_effect" && action.effect_number) {
+            console.log(`[Agent] Action: select_effect - effect ${action.effect_number}`);
             setSelectedEffect(action.effect_number);
+          } else {
+            console.log(`[Agent] Action: ${action.type}`, action);
           }
         }
       }
+      console.log(`[Agent] ${agentName} reasoning cycle complete`);
     } catch (err) {
-      console.error("Agent reasoning error:", err);
+      console.error(`[Agent] Reasoning error:`, err);
     }
   }, [currentAgent, audioMetrics, selectedEffect, isAgentActive, sendParameterUpdate]);
 
@@ -230,21 +269,31 @@ export default function Home() {
   };
 
   const startScopeSession = useCallback(
-    async (stream: MediaStream) => {
+    async (stream: MediaStream, retryCount = 0) => {
+      const maxRetries = 5;
+      const baseDelay = 2000;
+      
+      console.log(`[Scope] Starting session attempt ${retryCount + 1}/${maxRetries}`);
       setHasStartedStream(false);
 
       try {
         stopWebRTC();
+        console.log("[Scope] WebRTC stopped");
 
+        console.log("[Scope] Loading pipeline: longlive");
         await loadPipeline(["longlive"], { input_mode: "video" });
+        console.log("[Scope] Pipeline loaded successfully");
 
+        console.log("[Scope] Starting WebRTC connection...");
         await startWebRTC(
           (remoteStream) => {
+            console.log("[Scope] Remote stream received");
             if (mainVideoRef.current) {
               mainVideoRef.current.srcObject = remoteStream;
               mainVideoRef.current.play().catch(console.error);
             }
             setHasStartedStream(true);
+            console.log("[Scope] Session started successfully!");
           },
           {
             input_mode: "video",
@@ -253,7 +302,17 @@ export default function Home() {
           stream,
         );
       } catch (err) {
-        console.error("Failed to start Scope session:", err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error(`[Scope] Session failed (attempt ${retryCount + 1}):`, errorMessage);
+        
+        if (errorMessage.includes("timeout") || errorMessage.includes("timeout") || retryCount < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, retryCount);
+          console.log(`[Scope] Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return startScopeSession(stream, retryCount + 1);
+        }
+        
+        console.error("[Scope] Max retries reached, giving up");
         setHasStartedStream(true);
       }
     },
@@ -262,6 +321,7 @@ export default function Home() {
 
   const handleHlsStreamReady = useCallback(
     async (stream: MediaStream | null) => {
+      console.log("[HLS] Stream ready, video tracks:", stream?.getVideoTracks().length || 0);
       if (stream) {
         effectStreamRef.current = stream;
       }
@@ -271,15 +331,21 @@ export default function Home() {
 
   const handleEffectStreamReady = useCallback(
     async (stream: MediaStream | null) => {
+      console.log("[EffectVideo] Stream ready");
       if (stream) {
         effectStreamRef.current = stream;
+        console.log("[EffectVideo] Video tracks:", stream.getVideoTracks().length);
+        console.log("[Audio] Initializing audio extraction...");
         initAudio();
         setIsAgentActive(true);
+        console.log("[Agent] Starting agent reasoning...");
         callAgentReasoning();
         if (agentIntervalRef.current) {
           clearInterval(agentIntervalRef.current);
         }
+        console.log("[Agent] Setting up reasoning interval (10s)");
         agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+        console.log("[Scope] Starting scope session...");
         await startScopeSession(stream);
       }
     },
