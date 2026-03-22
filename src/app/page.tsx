@@ -163,6 +163,14 @@ export default function Home() {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[Agent] Reasoning failed: ${response.status} - ${errorText}`);
+        
+        if (response.status === 429) {
+          const retryMatch = errorText.match(/try again in ([\d.]+)s/);
+          const retryDelay = retryMatch ? parseFloat(retryMatch[1]) * 1000 : 2000;
+          console.log(`[Agent] Rate limited, retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return callAgentReasoning();
+        }
         return;
       }
 
@@ -254,7 +262,7 @@ export default function Home() {
       if (agentIntervalRef.current) {
         clearInterval(agentIntervalRef.current);
       }
-      agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+      agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
     }
     return () => {
       if (agentIntervalRef.current) {
@@ -362,8 +370,8 @@ export default function Home() {
         if (agentIntervalRef.current) {
           clearInterval(agentIntervalRef.current);
         }
-        console.log("[Agent] Setting up reasoning interval (10s)");
-        agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+        console.log("[Agent] Setting up reasoning interval (30s)");
+        agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
         console.log("[Scope] Starting scope session...");
         await startScopeSession(stream);
       }
@@ -476,7 +484,7 @@ export default function Home() {
                 className="absolute bottom-6 right-6 z-20 inline-flex items-center gap-3 rounded-full border border-white/30 bg-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white cursor-pointer hover:bg-white/20 transition-colors"
               >
                 <Joystick className="h-4 w-4" />
-                Book {currentAgent}
+                Active agent - {currentAgent}
               </button>
             </div>
           </div>

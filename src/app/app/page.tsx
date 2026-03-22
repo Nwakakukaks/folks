@@ -158,7 +158,16 @@ export default function AppPage() {
       });
 
       if (!response.ok) {
-        console.error("Agent reasoning failed:", response.status);
+        const errorText = await response.text();
+        console.error(`[Agent] Reasoning failed: ${response.status} - ${errorText}`);
+        
+        if (response.status === 429) {
+          const retryMatch = errorText.match(/try again in ([\d.]+)s/);
+          const retryDelay = retryMatch ? parseFloat(retryMatch[1]) * 1000 : 2000;
+          console.log(`[Agent] Rate limited, retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return callAgentReasoning();
+        }
         return;
       }
 
@@ -227,7 +236,7 @@ export default function AppPage() {
         showInfo(`Starting ${selectedAgent?.name}...`);
 
         callAgentReasoning();
-        agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+        agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
       }
     }
   }, [isStreaming, validatePrerequisites, selectedAgent, initAudio, callAgentReasoning, stopWebRTC]);
