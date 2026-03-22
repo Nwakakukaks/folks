@@ -6,8 +6,15 @@ import { Anton, Space_Grotesk } from "next/font/google";
 import { Loader2, ExternalLink, Joystick, Radio, Calendar, Info, ShoppingBag, ChevronDown } from "lucide-react";
 import AuthModal from "@/components/AuthModal";
 import HLSPlayer from "@/components/HLSPlayer";
+import EffectVideoPlayer from "@/components/EffectVideoPlayer";
+import SkillDialog from "@/components/SkillDialog";
+import AudioInitDialog from "@/components/AudioInitDialog";
 import { supabase } from "@/lib/supabase";
 import { useScopeServer } from "@/hooks/useScopeServer";
+import { useAudioExtractor } from "@/hooks/useAudioExtractor";
+import { useAudioReactive } from "@/hooks/useAudioReactive";
+import { useAudioPlayer } from "@/context/AudioPlayerContext";
+import { AGENTS } from "@/components/AgentSprite";
 
 const HLS_URL = "https://nyc-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=955409166";
 
@@ -63,8 +70,94 @@ export default function Home() {
   const [user, setUser] = useState<{ email?: string; avatar_url?: string } | null>(null);
   const [hasStartedStream, setHasStartedStream] = useState(false);
   const [expandedDay, setExpandedDay] = useState<string | null>(weeklySchedule[0]?.date ?? null);
+  const [selectedEffect, setSelectedEffect] = useState(1);
+  const [isAgentActive, setIsAgentActive] = useState(false);
+  const [currentAgent, setCurrentAgent] = useState("Echo");
+  const [currentMood, setCurrentMood] = useState("neutral");
+  const effectStreamRef = useRef<MediaStream | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const agentIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { isConnected, isConnecting, error: connectionError, startWebRTC, stopWebRTC, loadPipeline } = useScopeServer();
+  const { isConnected, isConnecting, error: connectionError, startWebRTC, stopWebRTC, loadPipeline, sendParameterUpdate, fetchPipelines } = useScopeServer();
+
+  const { audioStream, initAudio, isReady: audioReady } = useAudioExtractor({
+    hlsUrl: HLS_URL,
+  });
+
+  const { metrics: audioMetrics } = useAudioReactive({
+    enabled: isAgentActive && !!audioStreamRef.current,
+    sourceStream: audioStreamRef.current,
+  });
+
+  const [agentPrompt, setAgentPrompt] = useState("vibrant abstract visuals with dynamic colors");
+  const [showAudioInitDialog, setShowAudioInitDialog] = useState(true);
+  const [showSkillDialog, setShowSkillDialog] = useState(false);
+  const [selectedAgentForSkill, setSelectedAgentForSkill] = useState("");
+
+  const { setAudioEnabled, muteAll } = useAudioPlayer();
+
+  const handleEnableAudio = () => {
+    console.log("[Home] handleEnableAudio called");
+    setAudioEnabled(true);
+    setShowAudioInitDialog(false);
+  };
+
+  const callAgentReasoning = useCallback(async () => {
+    if (!audioStreamRef.current || !isAgentActive) return;
+
+    const agentName = currentAgent.toLowerCase();
+
+    try {
+      const response = await fetch("/api/agents/reason", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent: agentName,
+          skill: "",
+          audio_metrics: audioMetrics || {
+            overall: 0.5,
+            beatDetected: false,
+            tempo: 0,
+            mood: "calm",
+            dominantRange: "mids",
+          },
+          current_state: {
+            pipeline: "longlive",
+            parameters: {},
+            plugins: [],
+            mood: "neutral",
+            current_effect: selectedEffect,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Agent reasoning failed:", response.status);
+        return;
+      }
+
+      const result = await response.json();
+
+      if (result.mood) {
+        setCurrentMood(result.mood);
+      }
+
+      if (result.actions) {
+        for (const action of result.actions) {
+          if (action.type === "send_prompt" && action.prompt) {
+            setAgentPrompt(action.prompt);
+            sendParameterUpdate({
+              prompts: [{ text: action.prompt, weight: 1.0 }],
+            });
+          } else if (action.type === "select_effect" && action.effect_number) {
+            setSelectedEffect(action.effect_number);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Agent reasoning error:", err);
+    }
+  }, [currentAgent, audioMetrics, selectedEffect, isAgentActive, sendParameterUpdate]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user: currentUser } }) => {
@@ -93,10 +186,40 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    fetchPipelines();
+  }, [fetchPipelines]);
+
+  useEffect(() => {
     return () => {
       stopWebRTC();
+      muteAll();
+      if (agentIntervalRef.current) {
+        clearInterval(agentIntervalRef.current);
+      }
     };
-  }, [stopWebRTC]);
+  }, [stopWebRTC, muteAll]);
+
+  useEffect(() => {
+    if (audioStream) {
+      audioStreamRef.current = audioStream;
+    }
+  }, [audioStream]);
+
+  useEffect(() => {
+    if (audioReady && effectStreamRef.current && isConnected && !hasStartedStream) {
+      setIsAgentActive(true);
+      callAgentReasoning();
+      if (agentIntervalRef.current) {
+        clearInterval(agentIntervalRef.current);
+      }
+      agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+    }
+    return () => {
+      if (agentIntervalRef.current) {
+        clearInterval(agentIntervalRef.current);
+      }
+    };
+  }, [audioReady, isConnected, hasStartedStream]);
 
   const handleBookAgents = () => {
     if (user) {
@@ -113,7 +236,7 @@ export default function Home() {
       try {
         stopWebRTC();
 
-        await loadPipeline(["passthrough"], { input_mode: "video" });
+        await loadPipeline(["longlive"], { input_mode: "video" });
 
         await startWebRTC(
           (remoteStream) => {
@@ -125,7 +248,7 @@ export default function Home() {
           },
           {
             input_mode: "video",
-            pipeline_ids: ["passthrough"],
+            pipeline_ids: ["longlive"],
           },
           stream,
         );
@@ -140,14 +263,36 @@ export default function Home() {
   const handleHlsStreamReady = useCallback(
     async (stream: MediaStream | null) => {
       if (stream) {
+        effectStreamRef.current = stream;
+      }
+    },
+    [],
+  );
+
+  const handleEffectStreamReady = useCallback(
+    async (stream: MediaStream | null) => {
+      if (stream) {
+        effectStreamRef.current = stream;
+        initAudio();
+        setIsAgentActive(true);
+        callAgentReasoning();
+        if (agentIntervalRef.current) {
+          clearInterval(agentIntervalRef.current);
+        }
+        agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
         await startScopeSession(stream);
       }
     },
-    [startScopeSession],
+    [initAudio, callAgentReasoning, startScopeSession],
   );
 
   const toggleDay = (date: string) => {
     setExpandedDay((current) => (current === date ? null : date));
+  };
+
+  const openSkillDialog = (agent: string) => {
+    setSelectedAgentForSkill(agent);
+    setShowSkillDialog(true);
   };
 
   return (
@@ -239,7 +384,7 @@ export default function Home() {
                 )}
               </div>
               <div className="absolute bottom-6 left-6 z-30 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/30 shadow-lg pointer-events-auto">
-                <HLSPlayer src={HLS_URL} onStreamReady={handleHlsStreamReady} className="w-full h-full" />
+                <HLSPlayer src={HLS_URL} muted onStreamReady={handleHlsStreamReady} className="w-full h-full" />
               </div>
               <button
                 onClick={handleBookAgents}
@@ -287,9 +432,15 @@ export default function Home() {
                 <h3 className={`${anton.className} text-3xl uppercase`}>Featured Agents</h3>
                 <div className="mt-6 grid gap-3 text-sm uppercase tracking-[0.2em] text-white/70">
                   {featuredAgents.map((agent) => (
-                    <div key={agent} className="flex items-center gap-3 border-b border-white/10 pb-3">
+                    <div key={agent} className="flex items-center gap-3 border-b border-white/10 pb-3 last:border-0">
                       <span className="h-2 w-2 rounded-full bg-yellow-400" />
-                      <span>{agent}</span>
+                      <span className="flex-1">{agent}</span>
+                      <button
+                        onClick={() => openSkillDialog(agent)}
+                        className="text-[10px] text-white/40 hover:text-white uppercase tracking-wider underline underline-offset-2"
+                      >
+                        View Skills
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -385,6 +536,23 @@ export default function Home() {
           setShowAuthModal(false);
           window.location.href = "/app";
         }}
+      />
+
+      <EffectVideoPlayer
+        activeEffect={selectedEffect}
+        onStreamReady={handleEffectStreamReady}
+       
+      />
+
+      <AudioInitDialog
+        isOpen={showAudioInitDialog}
+        onConfirm={handleEnableAudio}
+      />
+
+      <SkillDialog
+        agent={selectedAgentForSkill}
+        isOpen={showSkillDialog}
+        onClose={() => setShowSkillDialog(false)}
       />
     </div>
   );

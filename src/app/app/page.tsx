@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import MiniHeader from "@/components/MiniHeader";
 import ShowDisplay from "@/components/ShowDisplay";
 import AuthModal from "@/components/AuthModal";
@@ -8,11 +8,17 @@ import OnboardingModal, { ShowSettings, loadSettings } from "@/components/Onboar
 import SetControlHub, { ActiveControlPanel } from "@/components/SetControlHub";
 import ControlDrawerContent, { getPanelTitle } from "@/components/ControlDrawerContent";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import HLSPlayer from "@/components/HLSPlayer";
-import { useAutoVJController } from "@/hooks/useAutoVJController";
-import { useScopeServer } from "@/hooks/useScopeServer";
+import EffectVideoPlayer from "@/components/EffectVideoPlayer";
+import HLSVideoPlayer from "@/components/HLSVideoPlayer";
+import { useScopeSession } from "@/context/ScopeSessionContext";
+import { useAgentBrain, AgentLog } from "@/hooks/useAgentBrain";
+import { useAudioExtractor } from "@/hooks/useAudioExtractor";
+import { useAudioReactive } from "@/hooks/useAudioReactive";
+import { useAudioPlayer } from "@/context/AudioPlayerContext";
 import { supabase } from "@/lib/supabase";
+import { showError, showInfo } from "@/lib/toast";
 import { Play } from "lucide-react";
+import { Agent, AGENTS } from "@/components/AgentSprite";
 
 type ContentMode = "show" | "output";
 const HLS_URL = "https://nyc-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=955409166";
@@ -23,13 +29,13 @@ export default function AppPage() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<ShowSettings | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [inputStream, setInputStream] = useState<MediaStream | null>(null);
   const [contentMode, setContentMode] = useState<ContentMode>("show");
   const [activePanel, setActivePanel] = useState<ActiveControlPanel>(null);
   const outputVideoRef = useRef<HTMLVideoElement>(null);
   const outputMainVideoRef = useRef<HTMLVideoElement>(null);
-  const inputStreamRef = useRef<MediaStream | null>(null);
+  const effectStreamRef = useRef<MediaStream | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const agentIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const {
     isConnected,
@@ -43,10 +49,46 @@ export default function AppPage() {
     configSchema,
     isLoadingPipeline,
     sendParameterUpdate,
-  } = useScopeServer();
+    remoteStream,
+  } = useScopeSession();
 
   const [selectedPipeline, setSelectedPipeline] = useState<string>("");
   const [inputSource, setInputSource] = useState<'webcam' | 'file' | 'hls'>('hls');
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
+  const [currentMood, setCurrentMood] = useState<string>("neutral");
+  const [selectedEffect, setSelectedEffect] = useState(1);
+  const [isScopeConnected, setIsScopeConnected] = useState(false);
+  const [agentPrompt, setAgentPrompt] = useState("vibrant abstract visuals with dynamic colors");
+  const [lastAgentReason, setLastAgentReason] = useState<string>("");
+
+  const { audioStream, initAudio, isReady: audioReady } = useAudioExtractor({
+    hlsUrl: inputSource === 'hls' ? HLS_URL : undefined,
+  });
+
+  useEffect(() => {
+    if (audioStream) {
+      audioStreamRef.current = audioStream;
+    }
+  }, [audioStream]);
+
+  const { metrics: audioMetrics } = useAudioReactive({
+    enabled: isStreaming && !!audioStreamRef.current,
+    sourceStream: audioStreamRef.current,
+  });
+
+  const { muteAll } = useAudioPlayer();
+
+  useEffect(() => {
+    muteAll();
+  }, [contentMode, muteAll]);
+
+  useEffect(() => {
+    return () => {
+      muteAll();
+    };
+  }, [muteAll]);
 
   const handlePipelineChange = useCallback((pipelineId: string) => {
     setSelectedPipeline(pipelineId);
@@ -62,68 +104,213 @@ export default function AppPage() {
     sendParameterUpdate({ [key]: value });
   }, [sendParameterUpdate]);
 
-  const handleInputSourceChange = useCallback((source: 'webcam' | 'file' | 'hls') => {
+  const validatePrerequisites = useCallback((): boolean => {
+    if (!user) {
+      showError("Please log in to start the agent");
+      return false;
+    }
+    if (!selectedAgent) {
+      showError("Please select an agent before starting");
+      return false;
+    }
+    if (!isConnected) {
+      showError("Please connect to Scope server first");
+      return false;
+    }
+    if (!process.env.NEXT_PUBLIC_GROQ_API_KEY) {
+      showError("Groq API key not configured");
+      return false;
+    }
+    if (!audioStreamRef.current) {
+      showError("No audio source available");
+      return false;
+    }
+    return true;
+  }, [user, selectedAgent, isConnected]);
+
+  const callAgentReasoning = useCallback(async () => {
+    if (!audioStreamRef.current || !isStreaming || !selectedAgent) return;
+
+    const agentName = selectedAgent.name.toLowerCase();
+
+    try {
+      const response = await fetch("/api/agents/reason", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent: agentName,
+          skill: "",
+          audio_metrics: audioMetrics || {
+            overall: 0.5,
+            beatDetected: false,
+            tempo: 0,
+            mood: "calm",
+            dominantRange: "mids",
+          },
+          current_state: {
+            pipeline: "longlive",
+            parameters: {},
+            plugins: [],
+            mood: currentMood,
+            current_effect: selectedEffect,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Agent reasoning failed:", response.status);
+        return;
+      }
+
+      const result = await response.json();
+
+      if (result.thinking) {
+        setLastAgentReason(result.thinking.substring(0, 100) + "...");
+        setAgentLogs(prev => [{
+          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          timestamp: new Date(),
+          agent: selectedAgent.name,
+          type: "thinking" as const,
+          content: result.thinking,
+        }, ...prev].slice(0, 100));
+      }
+
+      if (result.mood !== currentMood) {
+        setCurrentMood(result.mood);
+      }
+
+      if (result.actions) {
+        for (const action of result.actions) {
+          if (action.type === "send_prompt" && action.prompt) {
+            setAgentPrompt(action.prompt);
+            sendParameterUpdate({
+              prompts: [{ text: action.prompt, weight: 1.0 }],
+            });
+            setAgentLogs(prev => [{
+              id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              timestamp: new Date(),
+              agent: selectedAgent.name,
+              type: "action" as const,
+              content: `Injecting prompt: "${action.prompt.substring(0, 50)}..."`,
+            }, ...prev].slice(0, 100));
+          } else if (action.type === "select_effect" && action.effect_number) {
+            setSelectedEffect(action.effect_number);
+            setAgentLogs(prev => [{
+              id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              timestamp: new Date(),
+              agent: selectedAgent.name,
+              type: "action" as const,
+              content: `Switching to effect ${action.effect_number}`,
+            }, ...prev].slice(0, 100));
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Agent reasoning error:", err);
+    }
+  }, [selectedAgent, audioMetrics, currentMood, selectedEffect, isStreaming, sendParameterUpdate]);
+
+  const handleStreamToggle = useCallback(() => {
+    if (isStreaming) {
+      if (agentIntervalRef.current) {
+        clearInterval(agentIntervalRef.current);
+        agentIntervalRef.current = null;
+      }
+      stopWebRTC();
+      setIsScopeConnected(false);
+      setIsStreaming(false);
+      showInfo("Agent stopped");
+    } else {
+      if (validatePrerequisites()) {
+        initAudio();
+        setIsStreaming(true);
+        showInfo(`Starting ${selectedAgent?.name}...`);
+
+        callAgentReasoning();
+        agentIntervalRef.current = setInterval(callAgentReasoning, 10000);
+      }
+    }
+  }, [isStreaming, validatePrerequisites, selectedAgent, initAudio, callAgentReasoning, stopWebRTC]);
+
+  const handleInputSourceChange = useCallback((source: "webcam" | "file" | "hls") => {
     setInputSource(source);
   }, []);
 
-  const handleStreamReady = useCallback((stream: MediaStream | null) => {
-    setInputStream(stream);
+  const handleVideoStreamReady = useCallback((stream: MediaStream | null) => {
+    effectStreamRef.current = stream;
   }, []);
 
-  useAutoVJController({
-    enabled: inputSource === "webcam" && !!inputStream && isConnected,
-    sourceStream: inputStream,
-    onControlFrame: sendParameterUpdate,
-    fps: 8,
-  });
-
-  // connectToScope must be defined before handleInputStreamReady
   const connectToScope = useCallback(async (stream?: MediaStream | null) => {
+    if (!stream) return;
+
     try {
       const initialParameters: Record<string, unknown> = {
-        input_mode: settings?.inputType === "audio" ? "audio" : "video",
-        pipeline_ids: ["passthrough"],
+        input_mode: "video",
+        pipeline_ids: ["longlive"],
+        prompts: [{ text: agentPrompt, weight: 1.0 }],
       };
 
-      await loadPipeline(["passthrough"], { input_mode: settings?.inputType });
+      await loadPipeline(["longlive"], { input_mode: "video" });
 
       await startWebRTC(
-        (stream) => {
-          setRemoteStream(stream);
-        },
+        () => undefined,
         initialParameters,
-        stream ?? null
+        stream
       );
+
+      setIsScopeConnected(true);
     } catch (error) {
       console.error("Scope connection error:", error);
     }
-  }, [settings?.inputType, loadPipeline, startWebRTC]);
+  }, [loadPipeline, startWebRTC, agentPrompt]);
 
   const disconnectFromScope = useCallback(() => {
     stopWebRTC();
-    setRemoteStream(null);
+    setIsScopeConnected(false);
   }, [stopWebRTC]);
 
-  const handleInputStreamReady = useCallback(
-    async (stream: MediaStream | null) => {
-      if (!stream) return;
-      
-      setInputStream(stream);
-      setInputSource('hls');
-
-      if (inputStreamRef.current === stream) {
-        return;
-      }
-      inputStreamRef.current = stream;
-
-      if ((settings?.inputType ?? "video") !== "none") {
-        await connectToScope(stream);
-      }
+  const scopeInterface = useMemo(() => ({
+    sendParameter: (params: Record<string, unknown>) => {
+      sendParameterUpdate(params);
     },
-    [connectToScope, settings?.inputType],
-  );
+    loadPipeline: async (id: string) => {
+      await loadPipeline([id]);
+    },
+    installPlugin: async (spec: string) => {
+      showInfo(`Installing plugin: ${spec}`);
+    },
+    configureNDI: async (enabled: boolean, name: string) => {
+      showInfo(`${enabled ? "Enabling" : "Disabling"} NDI: ${name}`);
+    },
+    getCurrentPipeline: () => activePipeline || selectedPipeline || "longlive",
+    getCurrentParameters: () => ({}),
+    getCurrentPlugins: () => [],
+  }), [sendParameterUpdate, loadPipeline, activePipeline, selectedPipeline]);
 
-  // Fetch pipelines on mount
+  const handleAgentLog = useCallback((log: AgentLog) => {
+    setAgentLogs((prev) => [log, ...prev].slice(0, 100));
+  }, []);
+
+  const handleMoodChange = useCallback((mood: string) => {
+    setCurrentMood(mood);
+  }, []);
+
+  const handleEffectChange = useCallback((effect: number) => {
+    setSelectedEffect(effect);
+  }, []);
+
+  useEffect(() => {
+    if (effectStreamRef.current && isConnected && isStreaming && !isScopeConnected) {
+      connectToScope(effectStreamRef.current);
+    }
+  }, [effectStreamRef.current, isConnected, isStreaming, isScopeConnected, connectToScope]);
+
+  useEffect(() => {
+    if (audioReady && effectStreamRef.current && isConnected && isStreaming && !isScopeConnected) {
+      connectToScope(effectStreamRef.current);
+    }
+  }, [audioReady, isConnected, isStreaming, isScopeConnected, connectToScope]);
+
   useEffect(() => {
     fetchPipelines();
   }, [fetchPipelines]);
@@ -136,18 +323,6 @@ export default function AppPage() {
       outputMainVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
-
-  // Handle input stream changes - reconnect to Scope when source changes
-  useEffect(() => {
-    if (inputStream && isConnected) {
-      // Small delay to allow cleanup of previous connection
-      const timer = setTimeout(() => {
-        disconnectFromScope();
-        setTimeout(() => connectToScope(inputStream), 100);
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [inputStream, inputSource]);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -187,14 +362,11 @@ export default function AppPage() {
       const savedSettings = loadSettings();
       if (savedSettings.completed) {
         setSettings(savedSettings);
-        if (savedSettings.inputType !== "none" && inputStream) {
-          connectToScope(inputStream);
-        }
       } else {
         setShowOnboarding(true);
       }
     }
-  }, [user, showAuthModal, inputStream]);
+  }, [user, showAuthModal]);
 
   const handleAuthSuccess = (isGuestMode?: boolean) => {
     if (isGuestMode) {
@@ -206,9 +378,6 @@ export default function AppPage() {
   const handleOnboardingComplete = (newSettings: ShowSettings) => {
     setSettings(newSettings);
     setShowOnboarding(false);
-    if (newSettings.inputType !== "none" && inputStream) {
-      connectToScope(inputStream);
-    }
   };
 
   const handleSettingsClose = () => {
@@ -238,6 +407,9 @@ export default function AppPage() {
         mode={contentMode}
         onModeChange={setContentMode}
         onAuthClick={() => setShowAuthModal(true)}
+        isStreaming={isStreaming}
+        onStreamToggle={handleStreamToggle}
+        agentName={selectedAgent?.name}
       />
 
       <div className="flex-1 flex pt-16 min-h-0 relative">
@@ -271,13 +443,15 @@ export default function AppPage() {
                         </div>
                       )}
                     </div>
-                    <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
-                      <HLSPlayer
-                        src={HLS_URL}
-                        onStreamReady={handleInputStreamReady}
-                        className="h-full w-full"
-                      />
-                    </div>
+                    {contentMode === "show" && (
+                      <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
+                        <HLSVideoPlayer
+                          playerId="app-show"
+                          src={HLS_URL}
+                          className="w-full h-full"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-2xl border border-white/10 bg-black/40 p-3 backdrop-blur-md">
@@ -317,19 +491,26 @@ export default function AppPage() {
                       </div>
                     </div>
                   )}
-                  <div className="absolute bottom-4 right-4 z-30 h-48 w-72 overflow-hidden rounded-lg border-2 border-white/30 bg-black shadow-xl pointer-events-auto">
-                    <HLSPlayer
-                      src={HLS_URL}
-                      onStreamReady={handleInputStreamReady}
-                      className="h-full w-full"
-                    />
-                  </div>
+                  {contentMode === "output" && (
+                    <div className="absolute bottom-4 right-4 z-30 h-48 w-72 overflow-hidden rounded-lg border-2 border-white/30 bg-black shadow-xl">
+                      <HLSVideoPlayer
+                        playerId="app-output"
+                        src={HLS_URL}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           )}
         </div>
       </div>
+
+      <EffectVideoPlayer
+        activeEffect={selectedEffect}
+        onStreamReady={handleVideoStreamReady}
+      />
 
       <Sheet open={!!drawerPanel} onOpenChange={(open) => !open && setActivePanel(null)}>
         <SheetContent onClose={() => setActivePanel(null)}>
@@ -344,7 +525,7 @@ export default function AppPage() {
                 onSettingsChange={setSettings}
                 isConnected={isConnected}
                 isConnecting={isConnecting}
-                onConnect={connectToScope}
+                onConnect={() => { }}
                 onDisconnect={disconnectFromScope}
                 pipelines={pipelineOptions}
                 activePipeline={activePipeline || selectedPipeline}
@@ -354,7 +535,7 @@ export default function AppPage() {
                 configSchema={configSchema}
                 onParamChange={handleParamChange}
                 sendParameterUpdate={sendParameterUpdate}
-                onStreamReady={handleStreamReady}
+                onStreamReady={() => { }}
                 onInputSourceChange={handleInputSourceChange}
               />
             </>
