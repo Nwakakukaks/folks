@@ -235,6 +235,9 @@ export default function Home() {
       if (agentIntervalRef.current) {
         clearInterval(agentIntervalRef.current);
       }
+      if (retryIntervalRef.current) {
+        clearInterval(retryIntervalRef.current);
+      }
     };
   }, [stopWebRTC, muteAll]);
 
@@ -260,6 +263,8 @@ export default function Home() {
     };
   }, [audioReady, isConnected, hasStartedStream]);
 
+  const retryIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   const handleBookAgents = () => {
     if (user) {
       window.location.href = "/app";
@@ -269,11 +274,8 @@ export default function Home() {
   };
 
   const startScopeSession = useCallback(
-    async (stream: MediaStream, retryCount = 0) => {
-      const maxRetries = 5;
-      const baseDelay = 2000;
-      
-      console.log(`[Scope] Starting session attempt ${retryCount + 1}/${maxRetries}`);
+    async (stream: MediaStream) => {
+      console.log("[Scope] Starting scope session...");
       setHasStartedStream(false);
 
       try {
@@ -303,21 +305,37 @@ export default function Home() {
         );
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error(`[Scope] Session failed (attempt ${retryCount + 1}):`, errorMessage);
-        
-        if (errorMessage.includes("timeout") || errorMessage.includes("timeout") || retryCount < maxRetries - 1) {
-          const delay = baseDelay * Math.pow(2, retryCount);
-          console.log(`[Scope] Retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return startScopeSession(stream, retryCount + 1);
-        }
-        
-        console.error("[Scope] Max retries reached, giving up");
+        console.error(`[Scope] Session failed:`, errorMessage);
+        console.log("[Scope] Will retry in 40 seconds if not streaming...");
         setHasStartedStream(true);
       }
     },
     [loadPipeline, startWebRTC, stopWebRTC],
   );
+
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+
+    const retryConnection = () => {
+      if (!hasStartedStream && effectStreamRef.current) {
+        console.log("[Scope] Stream not started after timeout, retrying...");
+        startScopeSession(effectStreamRef.current);
+      }
+    };
+
+    console.log("[Scope] Starting 40s retry timer...");
+    retryIntervalRef.current = setInterval(retryConnection, 40000);
+
+    return () => {
+      console.log("[Scope] Clearing retry timer");
+      if (retryIntervalRef.current) {
+        clearInterval(retryIntervalRef.current);
+        retryIntervalRef.current = null;
+      }
+    };
+  }, [isConnected, hasStartedStream, startScopeSession]);
 
   const handleHlsStreamReady = useCallback(
     async (stream: MediaStream | null) => {
