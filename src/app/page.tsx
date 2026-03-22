@@ -300,6 +300,7 @@ export default function Home() {
           {
             input_mode: "video",
             pipeline_ids: ["longlive"],
+            prompts: [{ text: agentPrompt, weight: 1.0 }],
           },
           stream,
         );
@@ -475,7 +476,7 @@ export default function Home() {
                 className="absolute bottom-6 right-6 z-20 inline-flex items-center gap-3 rounded-full border border-white/30 bg-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white cursor-pointer hover:bg-white/20 transition-colors"
               >
                 <Joystick className="h-4 w-4" />
-                Book agent VJ
+                Book {currentAgent}
               </button>
             </div>
           </div>
