@@ -27,46 +27,71 @@ export default function HLSPlayer({
   const [isMuted, setIsMuted] = useState(muted);
   const hlsRef = useRef<any>(null);
   const streamReadyCalledRef = useRef(false);
+  const drawLoopStartedRef = useRef(false);
+  const onStreamReadyRef = useRef(onStreamReady);
+
+  useEffect(() => {
+    onStreamReadyRef.current = onStreamReady;
+  }, [onStreamReady]);
 
   const captureCanvasStream = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || !onStreamReady) return;
-    if (streamReadyCalledRef.current) return;
+    if (!video || !canvas) return;
 
     try {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      const updateCanvasSize = () => {
-        if (video.videoWidth && video.videoHeight) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-        }
-      };
-
-      updateCanvasSize();
-      video.addEventListener("loadedmetadata", updateCanvasSize);
-
-      const drawFrame = () => {
-        if (video && ctx && canvas) {
-          try {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          } catch {
-            // Ignore draw errors during transition
+      if (!drawLoopStartedRef.current) {
+        const updateCanvasSize = () => {
+          if (video.videoWidth && video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
           }
-        }
-        animationFrameRef.current = requestAnimationFrame(drawFrame);
-      };
+        };
 
-      drawFrame();
+        updateCanvasSize();
+        video.addEventListener("loadedmetadata", updateCanvasSize);
 
-      const stream = canvas.captureStream(15);
-      canvasStreamRef.current = stream;
-      streamReadyCalledRef.current = true;
-      onStreamReady(stream);
+        const drawFrame = () => {
+          if (video && ctx && canvas) {
+            try {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            } catch {
+              // Ignore draw errors during transition
+            }
+          }
+          animationFrameRef.current = requestAnimationFrame(drawFrame);
+        };
+
+        drawLoopStartedRef.current = true;
+        drawFrame();
+      }
+
+      if (!streamReadyCalledRef.current && onStreamReadyRef.current) {
+        const stream = canvas.captureStream(15);
+        canvasStreamRef.current = stream;
+        streamReadyCalledRef.current = true;
+        onStreamReadyRef.current(stream);
+      }
     } catch (err) {
       console.error("Failed to create canvas stream:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (onStreamReadyRef.current && !streamReadyCalledRef.current) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      try {
+        const stream = canvas.captureStream(15);
+        canvasStreamRef.current = stream;
+        streamReadyCalledRef.current = true;
+        onStreamReadyRef.current(stream);
+      } catch {
+        // no-op
+      }
     }
   }, [onStreamReady]);
 
@@ -156,6 +181,7 @@ export default function HLSPlayer({
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
+      drawLoopStartedRef.current = false;
       if (canvasStreamRef.current) {
         canvasStreamRef.current.getTracks().forEach(track => track.stop());
         canvasStreamRef.current = null;

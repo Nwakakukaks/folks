@@ -5,8 +5,8 @@ import Link from "next/link";
 import { Anton, Space_Grotesk } from "next/font/google";
 import { Loader2, ExternalLink, Joystick, Radio, Calendar, Info, ShoppingBag, ChevronDown } from "lucide-react";
 import AuthModal from "@/components/AuthModal";
-import HLSPlayer from "@/components/HLSPlayer";
 import EffectVideoPlayer from "@/components/EffectVideoPlayer";
+import HLSPlayer from "@/components/HLSPlayer";
 import SkillDialog from "@/components/SkillDialog";
 import AudioInitDialog from "@/components/AudioInitDialog";
 import { supabase } from "@/lib/supabase";
@@ -16,7 +16,7 @@ import { useAudioReactive } from "@/hooks/useAudioReactive";
 import { useAudioPlayer } from "@/context/AudioPlayerContext";
 import { AGENTS } from "@/components/AgentSprite";
 
-const HLS_URL = "https://nyc-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=955409166";
+const HLS_URL = "https://mdw-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=3158657102";
 
 const anton = Anton({
   subsets: ["latin"],
@@ -97,9 +97,14 @@ export default function Home() {
   const [isAgentActive, setIsAgentActive] = useState(false);
   const [currentAgent, setCurrentAgent] = useState("Echo");
   const [currentMood, setCurrentMood] = useState("neutral");
-  const effectStreamRef = useRef<MediaStream | null>(null);
+  const [isStartingScope, setIsStartingScope] = useState(false);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const agentIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isStartingScopeRef = useRef(false);
+  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const startWatchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const startScopeSessionRef = useRef<() => void>(() => {});
+  const effectStreamRef = useRef<MediaStream | null>(null);
 
   const { isConnected, isConnecting, error: connectionError, startWebRTC, stopWebRTC, loadPipeline, sendParameterUpdate, fetchPipelines } = useScopeServer();
 
@@ -119,10 +124,24 @@ export default function Home() {
 
   const { setAudioEnabled, muteAll } = useAudioPlayer();
 
+  const handleEffectStreamReady = useCallback((stream: MediaStream) => {
+    effectStreamRef.current = stream;
+    console.log("[Effect] Stream ready:", stream.getVideoTracks().length, "video tracks");
+  }, []);
+
   const handleEnableAudio = () => {
     console.log("[Home] handleEnableAudio called");
     setAudioEnabled(true);
     setShowAudioInitDialog(false);
+    initAudio();
+    setIsAgentActive(true);
+    console.log("[Agent] Starting agent reasoning...");
+    callAgentReasoning();
+    if (agentIntervalRef.current) {
+      clearInterval(agentIntervalRef.current);
+    }
+    console.log("[Agent] Setting up reasoning interval (10s)");
+    agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
   };
 
   const callAgentReasoning = useCallback(async () => {
@@ -151,7 +170,7 @@ export default function Home() {
             dominantRange: "mids",
           },
           current_state: {
-            pipeline: "longlive",
+            pipeline: "passthrough",
             parameters: {},
             plugins: [],
             mood: "neutral",
@@ -160,19 +179,7 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[Agent] Reasoning failed: ${response.status} - ${errorText}`);
-        
-        if (response.status === 429) {
-          const retryMatch = errorText.match(/try again in ([\d.]+)s/);
-          const retryDelay = retryMatch ? parseFloat(retryMatch[1]) * 1000 : 2000;
-          console.log(`[Agent] Rate limited, retrying in ${retryDelay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, retryDelay));
-          return callAgentReasoning();
-        }
-        return;
-      }
+    
 
       const result = await response.json();
       console.log("[Agent] Reasoning response:", JSON.stringify(result, null, 2));
@@ -190,7 +197,10 @@ export default function Home() {
             setAgentPrompt(action.prompt);
             console.log("[Scope] Sending prompt to server...");
             sendParameterUpdate({
-              prompts: [{ text: action.prompt, weight: 1.0 }],
+              transition: {
+                target_prompts: [{ text: action.prompt, weight: 1.0 }],
+                num_steps: 8
+              }
             });
           } else if (action.type === "select_effect" && action.effect_number) {
             console.log(`[Agent] Action: select_effect - effect ${action.effect_number}`);
@@ -240,12 +250,7 @@ export default function Home() {
     return () => {
       stopWebRTC();
       muteAll();
-      if (agentIntervalRef.current) {
-        clearInterval(agentIntervalRef.current);
-      }
-      if (retryIntervalRef.current) {
-        clearInterval(retryIntervalRef.current);
-      }
+    
     };
   }, [stopWebRTC, muteAll]);
 
@@ -255,24 +260,6 @@ export default function Home() {
     }
   }, [audioStream]);
 
-  useEffect(() => {
-    if (audioReady && effectStreamRef.current && isConnected && !hasStartedStream) {
-      setIsAgentActive(true);
-      callAgentReasoning();
-      if (agentIntervalRef.current) {
-        clearInterval(agentIntervalRef.current);
-      }
-      agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
-    }
-    return () => {
-      if (agentIntervalRef.current) {
-        clearInterval(agentIntervalRef.current);
-      }
-    };
-  }, [audioReady, isConnected, hasStartedStream]);
-
-  const retryIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
   const handleBookAgents = () => {
     if (user) {
       window.location.href = "/app";
@@ -281,18 +268,62 @@ export default function Home() {
     }
   };
 
+  const scheduleRetry = useCallback((delayMs: number, reason: string) => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+    console.log(`[Scope] Scheduling retry in ${Math.round(delayMs / 1000)}s (${reason})`);
+    retryTimeoutRef.current = setTimeout(() => {
+      startScopeSessionRef.current();
+    }, delayMs) as unknown as NodeJS.Timeout;
+  }, []);
+
   const startScopeSession = useCallback(
-    async (stream: MediaStream) => {
+    async () => {
+      if (isStartingScopeRef.current) {
+        console.log("[Scope] Start already in progress, skipping duplicate attempt");
+        return;
+      }
+
       console.log("[Scope] Starting scope session...");
+      isStartingScopeRef.current = true;
+      setIsStartingScope(true);
       setHasStartedStream(false);
 
       try {
+        if (startWatchdogRef.current) {
+          clearTimeout(startWatchdogRef.current);
+          startWatchdogRef.current = null;
+        }
+
         stopWebRTC();
         console.log("[Scope] WebRTC stopped");
 
-        console.log("[Scope] Loading pipeline: longlive");
-        await loadPipeline(["longlive"], { input_mode: "video" });
+        console.log("[Scope] Loading pipeline: kaleido-scope");
+        await loadPipeline(["kaleido-scope"], { input_mode: "video" });
         console.log("[Scope] Pipeline loaded successfully");
+
+        if (!effectStreamRef.current) {
+          console.log("[Scope] Waiting for effect video stream...");
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(resolve, 10000);
+            const checkInterval = setInterval(() => {
+              if (effectStreamRef.current) {
+                clearTimeout(timeout);
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }, 100);
+          });
+        }
+
+        if (!effectStreamRef.current) {
+          console.error("[Scope] Effect video not ready");
+          isStartingScopeRef.current = false;
+          setIsStartingScope(false);
+          return;
+        }
 
         console.log("[Scope] Starting WebRTC connection...");
         await startWebRTC(
@@ -302,82 +333,70 @@ export default function Home() {
               mainVideoRef.current.srcObject = remoteStream;
               mainVideoRef.current.play().catch(console.error);
             }
+            if (startWatchdogRef.current) {
+              clearTimeout(startWatchdogRef.current);
+              startWatchdogRef.current = null;
+            }
             setHasStartedStream(true);
             console.log("[Scope] Session started successfully!");
           },
           {
             input_mode: "video",
-            pipeline_ids: ["longlive"],
+            pipeline_ids: ["kaleido-scope"],
             prompts: [{ text: agentPrompt, weight: 1.0 }],
           },
-          stream,
+          effectStreamRef.current
         );
+
+
+        startWatchdogRef.current = setTimeout(() => {
+          if (!mainVideoRef.current?.srcObject) {
+            console.warn("[Scope] No remote stream after 35s, forcing retry...");
+            setHasStartedStream(false);
+            stopWebRTC();
+            scheduleRetry(3000, "no remote frames");
+          }
+        }, 35000) as unknown as NodeJS.Timeout;
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[Scope] Session failed:`, errorMessage);
-        console.log("[Scope] Will retry in 40 seconds if not streaming...");
-        setHasStartedStream(true);
+        setHasStartedStream(false);
+        scheduleRetry(15000, "start failed");
+      } finally {
+        isStartingScopeRef.current = false;
+        setIsStartingScope(false);
       }
     },
-    [loadPipeline, startWebRTC, stopWebRTC],
+    [loadPipeline, scheduleRetry, startWebRTC, stopWebRTC, agentPrompt],
   );
+
+  useEffect(() => {
+    startScopeSessionRef.current = () => {
+      void startScopeSession();
+    };
+  }, [startScopeSession]);
 
   useEffect(() => {
     if (!isConnected) {
       return;
     }
 
-    const retryConnection = () => {
-      if (!hasStartedStream && effectStreamRef.current) {
-        console.log("[Scope] Stream not started after timeout, retrying...");
-        startScopeSession(effectStreamRef.current);
-      }
-    };
+    if (!hasStartedStream && !isStartingScope) {
+      console.log("[Scope] Connected and no stream yet, triggering session start");
+      startScopeSession();
+    }
+  }, [isConnected, hasStartedStream, isStartingScope, startScopeSession]);
 
-    console.log("[Scope] Starting 40s retry timer...");
-    retryIntervalRef.current = setInterval(retryConnection, 40000);
-
+  useEffect(() => {
     return () => {
-      console.log("[Scope] Clearing retry timer");
-      if (retryIntervalRef.current) {
-        clearInterval(retryIntervalRef.current);
-        retryIntervalRef.current = null;
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+      }
+      if (startWatchdogRef.current) {
+        clearTimeout(startWatchdogRef.current);
       }
     };
-  }, [isConnected, hasStartedStream, startScopeSession]);
-
-  const handleHlsStreamReady = useCallback(
-    async (stream: MediaStream | null) => {
-      console.log("[HLS] Stream ready, video tracks:", stream?.getVideoTracks().length || 0);
-      if (stream) {
-        effectStreamRef.current = stream;
-      }
-    },
-    [],
-  );
-
-  const handleEffectStreamReady = useCallback(
-    async (stream: MediaStream | null) => {
-      console.log("[EffectVideo] Stream ready");
-      if (stream) {
-        effectStreamRef.current = stream;
-        console.log("[EffectVideo] Video tracks:", stream.getVideoTracks().length);
-        console.log("[Audio] Initializing audio extraction...");
-        initAudio();
-        setIsAgentActive(true);
-        console.log("[Agent] Starting agent reasoning...");
-        callAgentReasoning();
-        if (agentIntervalRef.current) {
-          clearInterval(agentIntervalRef.current);
-        }
-        console.log("[Agent] Setting up reasoning interval (30s)");
-        agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
-        console.log("[Scope] Starting scope session...");
-        await startScopeSession(stream);
-      }
-    },
-    [initAudio, callAgentReasoning, startScopeSession],
-  );
+  }, []);
 
   const toggleDay = (date: string) => {
     setExpandedDay((current) => (current === date ? null : date));
@@ -477,13 +496,13 @@ export default function Home() {
                 )}
               </div>
               <div className="absolute bottom-6 left-6 z-30 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/30 shadow-lg pointer-events-auto">
-                <HLSPlayer src={HLS_URL} muted onStreamReady={handleHlsStreamReady} className="w-full h-full" />
+                <HLSPlayer src={HLS_URL} muted className="w-full h-full" />
               </div>
               <button
                 onClick={handleBookAgents}
                 className="absolute bottom-6 right-6 z-20 inline-flex items-center gap-3 rounded-full border border-white/30 bg-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white cursor-pointer hover:bg-white/20 transition-colors"
               >
-                <Joystick className="h-4 w-4" />
+               
                 Active agent - {currentAgent}
               </button>
             </div>
@@ -631,12 +650,6 @@ export default function Home() {
         }}
       />
 
-      <EffectVideoPlayer
-        activeEffect={selectedEffect}
-        onStreamReady={handleEffectStreamReady}
-       
-      />
-
       <AudioInitDialog
         isOpen={showAudioInitDialog}
         onConfirm={handleEnableAudio}
@@ -646,6 +659,14 @@ export default function Home() {
         agent={selectedAgentForSkill}
         isOpen={showSkillDialog}
         onClose={() => setShowSkillDialog(false)}
+      />
+
+      <EffectVideoPlayer
+        activeEffect={selectedEffect}
+        onStreamReady={handleEffectStreamReady}
+        width={576}
+        height={320}
+        fps={15}
       />
     </div>
   );

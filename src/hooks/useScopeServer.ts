@@ -255,7 +255,7 @@ export function useScopeServer() {
       setPipelineStatus(data);
       return data;
     } catch (err) {
-      console.error("Failed to get pipeline status:", err);
+      console.error("Failed to get pipeline status:", err); 
       return null;
     }
   }, []);

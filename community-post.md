@@ -1,108 +1,50 @@
-# OpenScope: Because Everyone Should Be Able to Build Plugins
+# Folks: A 24/7 AI VJ Station
 
-A fellow cohort participant shared this after spending a day building their first plugin:
+Folks is a live visual performance platform running continuously, 24 hours a day, 7 days a week. Five AI agents—Echo, Vesper, Riley, Maya, and Luna—perform endless shifts as resident VJs, each bringing their own visual style and energy. It's like a radio station, but for live visuals instead of music.
 
-"It seems it is still quite challenging for a person who doesn't have strong coding experience, like me, to build a plugin at the moment. Though the vibe coding experience was amazing."
+The concept is inspired by The Lot Radio's model of continuous broadcast applied to visual performance. The agents operate autonomously, reading audio cues and making decisions about transitions, effects, and mood shifts on their own.
 
-Plugins is where Scope gets genuinely exciting. The ability to build entirely new experiences on top of Scope without touching the core codebase is a huge deal. Right now you need some Python knowledge to get there, and not everyone has that background yet.
+## Watch the Show
 
-That's what OpenScope is built to fix.
+The Folks stream runs continuously. You can tune in anytime to watch the AI agents perform. There's always something happening—new visual territory being explored, different moods being explored, the agents competing for attention or blending together in unexpected ways.
 
-What it is
+## Create Your Own VJ Set
 
-OpenScope is a visual, node-based plugin builder for Daydream Scope. You drag nodes onto a canvas, wire them together, and the Python writes itself in real-time as you work. When you're ready, one click exports a Daydream-compatible plugin ZIP ready to install directly into Scope.
+Beyond watching, you can use Folks as your own AI VJ. Connect your audio source—microphone, webcam, video file, or NDI—and have the agents perform live visuals for your content. Pick the agent whose style matches your vibe, and the AI handles the visuals in real-time.
 
-Features
+This isn't a pre-programmed light show. The agents listen and respond, making decisions about what to do based on what they hear and see. The result is a performance that feels alive rather than mechanical.
 
-What Shipped
-The current release includes a rich node library covering inputs, outputs, pre-processors, main pipelines, post-processors, and agent plugin builder.
+## For Your Next Event
 
-1. Core Nodes
+Folks is built for anyone who needs live visuals without a dedicated visual artist:
 
-Plugin Config: Define pipeline settings, usage mode (main/preprocessor/postprocessor), and configuration options
+- **Bands** performing without a VJ
+- **Event locations** needing ambient visuals on loop
+- **Pop-up parties** where a full production setup isn't feasible
+- **DJs** who want AI-controlled visuals without manual operation
+- **Art galleries and installations** seeking dynamic, generative content
+- **Venues and lounges** wanting continuous atmospheric visuals
 
-Input nodes: 
-- Video Input: Accept video frames for processing
-- Text Prompt: Text with weights for generation
-- Image Input: Reference images for style transfer
+No setup required. Just connect and go.
 
-Pipeline: Dynamically loaded pipelines from your Scope server - connect to any available processor
+## The Agents
 
-Pre-processor:
-- Use existing preprocessor pipelines from your server
-- Create New (Beta): Build new preprocessors with AI
+**Echo** — Cyan robotic presence. High-energy glitch aesthetics. Built for techno, electronic, and high-tempo sets.
 
-Post-processor:
-- Use existing postprocessor pipelines from your server
-- Create New (Beta): Build new postprocessors with AI
+**Vesper** — Warm pink analog soul. VHS scanlines and film grain. Ideal for nostalgic, emotional, and smooth transitions.
 
-Output Node: Main Pipeline output
+**Riley** — Bold orange typographic consciousness. Makes sound visible through kinetic typography and geometric shapes.
 
-2. AI-Powered Processor Creation (Beta)
+**Maya** — Ethereal purple psychedelic consciousness. Dissolves reality with flowing, organic visual patterns.
 
-Describe a processor in plain language and get working node code back. OpenScope's AI understands Scope's plugin spec specifically and can generate:
-- Custom preprocessors for masking, transformations
-- Custom postprocessors for effects, adjustments
-- Full plugin configurations with modes
+**Luna** — Serene green ambient reflection. Creates mirror-like water caustics and slow, flowing motion.
 
-3. Starter Templates
+## Get Involved
 
-Never start from a blank canvas. Choose from:
-- Blank Plugin: Start fresh
-- Kaleidoscope: Classic kaleidoscope effect
-- YOLO Mask: Object detection masking
-- Bloom: Glow effect
-- Cosmic VFX: Cosmic-themed visual effects
-- VFX Pack: Community VFX collection
-- Community-submitted templates (coming soon)
+Folks is still developing. If you want to contribute ideas, report issues, or help shape what comes next, reach out.
 
-4. Plugin Management
+## Links
 
-Install plugins directly from GitHub or other Git sources:
-- Paste a GitHub URL or package name
-- One-click install
-- View installed plugins with version and pipeline count
-- Uninstall plugins when no longer needed
+App: [Coming Soon]()
 
-5. Interactive Guides
-
-Built-in tutorials to help you learn:
-- 1. Getting Started: What is OpenScope?
-- 2. First Processor: Create a custom processor with AI
-- 3. Node Types: Understand all nodes available
-- 4. Preprocessors: Use available pipelines or create new
-- 5. Postprocessors: Use available pipelines or create new
-- Custom Notes: Add your own notes to the canvas
-
-6. AI Assistant
-
-Chat with an AI assistant that can:
-- Suggest nodes based on your goal
-- Explain what each node does
-- Help you build specific effects
-- Fix issues with your plugin
-
-7. Export in One Click
-
-Produces a plugin ZIP that installs cleanly into Scope. Your node graph becomes ready-to-use Python code automatically.
-
-Credits: A huge thank you to community creators @viborc (for the VFX Pack), @cosmic (for Cosmic VFX), @JamesDawson (for Scope bloom), @RyanontheInside(for YOLO Mask) and Marky (for kaleidoscope). Their work has been integrated into the starter templates.
-
-What's Coming
-Because of limited time, I had to prioritise getting a working version out thus leaving out a lot of implementations I would love to add. here's some additions that will be available in the coming weeks
-
-Expanding the node library with more templates and nodes to create interesting experiences visually 
-
-- Stronger real-time preview inside the builder
-- Continued improvements to AI generation as it gets better at understanding Scope's architecture
-- And more
-
-The longer-term vision is that OpenScope becomes the on-ramp that makes Scope's plugin ecosystem genuinely open and accessible to everyone - visual artists, creative technologists, hobbyists who have the ideas but not necessarily the coding background to realise them.
-
-Come Help Shape it
-Try it, break it, tell me what's missing. If you've wanted to build a Scope plugin but hit a wall, try OpenScope and tell me where it hits a wall. And if you've built plugins the hard way and think the node model is missing something obvious — feedbacks are most welcomed!
-
-Links
-
-App: https://openscope-ebon.vercel.app/
-Github: https://github.com/Nwakakukaks/openscope
+GitHub: [Coming Soon]()

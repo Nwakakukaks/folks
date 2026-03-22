@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Camera, Music, Video, Layers, Radio, Wifi, WifiOff, Plus, X, ChevronDown, Loader2, RefreshCw } from "lucide-react";
+import { Camera, Music, Video, Layers, Radio, Wifi, WifiOff, Plus, X, ChevronDown, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { ShowSettings, saveSettings } from "./OnboardingModal";
-import { AGENTS, AgentHead } from "./AgentSprite";
+import { AGENTS, AgentHead, Agent } from "./AgentSprite";
 import { ActiveControlPanel } from "./SetControlHub";
 import { getBackendUrl } from "@/hooks/useScopeServer";
+import { AgentLog } from "@/hooks/useAgentBrain";
 
 const SCOPE_API_URL = "/api/scope";
 
@@ -26,7 +27,14 @@ interface ControlDrawerContentProps {
   onParamChange: (key: string, value: any) => void;
   sendParameterUpdate: (params: Record<string, any>) => void;
   onStreamReady?: (stream: MediaStream | null) => void;
+  onFileStreamReady?: (stream: MediaStream | null, videoElement: HTMLVideoElement) => void;
   onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
+  agentLogs?: AgentLog[];
+  agent?: Agent | null;
+  onClearLogs?: () => void;
+  onResumeAgent?: () => void;
+  userOverrideActive?: boolean;
+  onUserOverride?: () => void;
 }
 
 interface LogEntry {
@@ -64,7 +72,14 @@ export default function ControlDrawerContent({
   onParamChange,
   sendParameterUpdate,
   onStreamReady,
+  onFileStreamReady,
   onInputSourceChange,
+  agentLogs = [],
+  agent = null,
+  onClearLogs,
+  onResumeAgent,
+  userOverrideActive = false,
+  onUserOverride,
 }: ControlDrawerContentProps) {
   const updateSettings = (updates: Partial<ShowSettings>) => {
     if (!settings) return;
@@ -79,6 +94,7 @@ export default function ControlDrawerContent({
         settings={settings}
         onSettingsChange={updateSettings}
         onStreamReady={onStreamReady}
+        onFileStreamReady={onFileStreamReady}
         onInputSourceChange={onInputSourceChange}
       />
     );
@@ -119,7 +135,16 @@ export default function ControlDrawerContent({
   }
 
   if (panel === "log") {
-    return <LogPanel isConnected={isConnected} />;
+    return (
+      <LogPanel 
+        isConnected={isConnected} 
+        logs={agentLogs}
+        agent={settings?.agent ? AGENTS.find(a => a.name === settings?.agent) : null}
+        onClearLogs={onClearLogs}
+        onResumeAgent={onResumeAgent}
+        userOverrideActive={userOverrideActive}
+      />
+    );
   }
 
   return null;
@@ -129,27 +154,32 @@ function InputPanel({
   settings,
   onSettingsChange,
   onStreamReady,
+  onFileStreamReady,
   onInputSourceChange,
 }: {
   settings: ShowSettings | null;
   onSettingsChange: (updates: Partial<ShowSettings>) => void;
   onStreamReady?: (stream: MediaStream | null) => void;
+  onFileStreamReady?: (stream: MediaStream | null, videoElement: HTMLVideoElement) => void;
   onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
 }) {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedAudio, setSelectedAudio] = useState<string>("");
-  const [selectedVideo, setSelectedVideo] = useState<string>("");
+  const [selectedAudio, setSelectedAudio] = useState("");
+  const [selectedVideo, setSelectedVideo] = useState("");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [currentSource, setCurrentSource] = useState<'webcam' | 'file' | 'hls'>('webcam');
+
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const videoFileRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previousLumaRef = useRef<Float32Array | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -171,36 +201,7 @@ function InputPanel({
     getDevices();
   }, []);
 
-  const startVideo = useCallback(async () => {
-    try {
-      // Stop any existing streams
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
-        audio: audioEnabled && selectedAudio ? { deviceId: { exact: selectedAudio } } : false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setVideoEnabled(true);
-      setCurrentSource('webcam');
-      onStreamReady?.(stream);
-      onInputSourceChange?.('webcam');
-    } catch (err) {
-      console.error("Failed to start video:", err);
-    }
-  }, [selectedVideo, selectedAudio, audioEnabled, onStreamReady, onInputSourceChange]);
-
-  const stopVideo = useCallback(() => {
+  const stopAllSources = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -209,33 +210,99 @@ function InputPanel({
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
+    if (videoFileRef.current) {
+      videoFileRef.current.pause();
+      videoFileRef.current.src = "";
+      videoFileRef.current = null;
+    }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    previousLumaRef.current = null;
+  }, []);
+
+  const startVideo = useCallback(async () => {
+    try {
+      stopAllSources();
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
+        audio: audioEnabled && selectedAudio ? { deviceId: { exact: selectedAudio } } : false,
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      setVideoEnabled(true);
+      setCurrentSource('webcam');
+      onStreamReady?.(stream);
+      onInputSourceChange?.('webcam');
+      onSettingsChange({ inputType: 'camera' });
+    } catch (err) {
+      console.error("Failed to start video:", err);
+    }
+  }, [selectedVideo, audioEnabled, selectedAudio, stopAllSources, onStreamReady, onInputSourceChange, onSettingsChange]);
+
+  const stopVideo = useCallback(() => {
+    stopAllSources();
     setVideoEnabled(false);
     setCurrentSource('webcam');
     onStreamReady?.(null);
-  }, [onStreamReady]);
+  }, [stopAllSources, onStreamReady]);
+
+  const detectPerformers = (
+    motionMask: Uint8Array,
+    width: number,
+    height: number,
+  ): Array<{ x: number; y: number; size: number }> => {
+    const visited = new Uint8Array(width * height);
+    const performers: Array<{ x: number; y: number; size: number }> = [];
+    const minBlobArea = 24;
+
+    for (let i = 0; i < motionMask.length; i += 1) {
+      if (motionMask[i] === 0 || visited[i] === 1) continue;
+
+      const queue = [i];
+      visited[i] = 1;
+      let area = 0;
+      let sumX = 0;
+      let sumY = 0;
+
+      while (queue.length > 0) {
+        const current = queue.pop()!;
+        const y = Math.floor(current / width);
+        const x = current - y * width;
+
+        area += 1;
+        sumX += x;
+        sumY += y;
+
+        const neighbors = [current - 1, current + 1, current - width, current + width];
+
+        for (const n of neighbors) {
+          if (n < 0 || n >= motionMask.length) continue;
+          if (visited[n] === 1 || motionMask[n] === 0) continue;
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+
+      if (area >= minBlobArea) {
+        performers.push({ x: sumX / area, y: sumY / area, size: area });
+      }
+    }
+
+    return performers.sort((a, b) => b.size - a.size).slice(0, 8);
+  };
 
   const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      // Stop any existing streams
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (videoFileRef.current) {
-        videoFileRef.current.pause();
-        videoFileRef.current.src = '';
-        videoFileRef.current = null;
-      }
+    if (!file) return;
 
-      // Create video element from file
+    try {
+      stopAllSources();
+
       const video = document.createElement('video');
       video.src = URL.createObjectURL(file);
       video.muted = true;
@@ -246,42 +313,110 @@ function InputPanel({
 
       await new Promise<void>((resolve, reject) => {
         video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error('Failed to load video'));
+        video.onerror = () => reject(new Error('Failed to load video file'));
       });
 
-      // Create canvas matching video resolution
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      canvasRef.current = canvas;
-      const ctx = canvas.getContext('2d');
+      const outputCanvas = document.createElement('canvas');
+      outputCanvas.width = video.videoWidth || 640;
+      outputCanvas.height = video.videoHeight || 480;
+      canvasRef.current = outputCanvas;
+      const outCtx = outputCanvas.getContext('2d');
 
-      if (!ctx) {
-        console.error('Failed to get canvas context');
+      const analysisCanvas = document.createElement('canvas');
+      analysisCanvas.width = 160;
+      analysisCanvas.height = 90;
+      analysisCanvasRef.current = analysisCanvas;
+      const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
+
+      const previewCtx = previewCanvasRef.current?.getContext('2d');
+
+      if (!outCtx || !analysisCtx) {
+        console.error('Failed to initialize canvas contexts');
         return;
       }
 
-      // Start video playback
       await video.play();
 
-      // Capture stream at 15fps
-      const stream = canvas.captureStream(15);
+      const stream = outputCanvas.captureStream(15);
       streamRef.current = stream;
 
-      // Continuous frame capture using requestAnimationFrame
       const drawFrame = () => {
-        if (videoFileRef.current && ctx && canvasRef.current) {
-          ctx.drawImage(videoFileRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+        if (!videoFileRef.current || !canvasRef.current) {
+          animationFrameRef.current = requestAnimationFrame(drawFrame);
+          return;
         }
+
+        const outW = canvasRef.current.width;
+        const outH = canvasRef.current.height;
+
+        outCtx.drawImage(videoFileRef.current, 0, 0, outW, outH);
+
+        analysisCtx.drawImage(videoFileRef.current, 0, 0, analysisCanvas.width, analysisCanvas.height);
+        const frame = analysisCtx.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+
+        const pixelCount = analysisCanvas.width * analysisCanvas.height;
+        const luma = new Float32Array(pixelCount);
+        const motionMask = new Uint8Array(pixelCount);
+
+        for (let p = 0; p < pixelCount; p += 1) {
+          const idx = p * 4;
+          const r = frame.data[idx] / 255;
+          const g = frame.data[idx + 1] / 255;
+          const b = frame.data[idx + 2] / 255;
+          luma[p] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        }
+
+        const previous = previousLumaRef.current;
+        if (previous) {
+          for (let p = 0; p < pixelCount; p += 1) {
+            motionMask[p] = Math.abs(luma[p] - previous[p]) > 0.11 ? 1 : 0;
+          }
+        }
+        previousLumaRef.current = luma;
+
+        const performers = detectPerformers(motionMask, analysisCanvas.width, analysisCanvas.height);
+        const sx = outW / analysisCanvas.width;
+        const sy = outH / analysisCanvas.height;
+        const points = performers.map((blob) => ({ x: blob.x * sx, y: blob.y * sy })).sort((a, b) => a.x - b.x);
+
+        if (points.length > 1) {
+          outCtx.strokeStyle = 'rgba(255, 230, 120, 0.85)';
+          outCtx.lineWidth = 2;
+          outCtx.beginPath();
+          points.forEach((point, idx) => {
+            if (idx === 0) outCtx.moveTo(point.x, point.y);
+            else outCtx.lineTo(point.x, point.y);
+          });
+          outCtx.stroke();
+        }
+
+        points.forEach((point) => {
+          outCtx.fillStyle = 'rgba(255, 235, 90, 0.95)';
+          outCtx.beginPath();
+          outCtx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+          outCtx.fill();
+        });
+
+        if (previewCtx && previewCanvasRef.current) {
+          previewCanvasRef.current.width = outW;
+          previewCanvasRef.current.height = outH;
+          previewCtx.drawImage(canvasRef.current, 0, 0);
+        }
+
         animationFrameRef.current = requestAnimationFrame(drawFrame);
       };
+
       drawFrame();
 
+      setVideoEnabled(false);
       setVideoFile(file);
       setCurrentSource('file');
       onStreamReady?.(stream);
+      onFileStreamReady?.(stream, video);
       onInputSourceChange?.('file');
-      onSettingsChange({ inputType: "video" });
+      onSettingsChange({ inputType: 'video' });
+    } catch (err) {
+      console.error('Failed to process uploaded video:', err);
     }
   };
 
@@ -295,18 +430,9 @@ function InputPanel({
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (videoFileRef.current) {
-        videoFileRef.current.pause();
-        videoFileRef.current.src = '';
-      }
+      stopAllSources();
     };
-  }, []);
+  }, [stopAllSources]);
 
   return (
     <div className="mt-4 space-y-4">
@@ -379,6 +505,16 @@ function InputPanel({
             </option>
           ))}
         </select>
+      )}
+
+      {currentSource === 'file' && (
+        <div className="space-y-2">
+          <div className="text-[9px] uppercase tracking-wider text-white/40">Tracked Video Preview</div>
+          <canvas
+            ref={previewCanvasRef}
+            className="w-full aspect-video rounded-lg bg-black object-contain border border-white/10"
+          />
+        </div>
       )}
 
       <div className="relative">
@@ -804,32 +940,46 @@ function AgentPanel({
   );
 }
 
-function LogPanel({ isConnected }: { isConnected: boolean }) {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isPolling, setIsPolling] = useState(false);
+function LogPanel({ 
+  isConnected,
+  logs,
+  agent,
+  onClearLogs,
+  onResumeAgent,
+  userOverrideActive,
+}: { 
+  isConnected: boolean;
+  logs?: AgentLog[];
+  agent?: Agent | null;
+  onClearLogs?: () => void;
+  onResumeAgent?: () => void;
+  userOverrideActive?: boolean;
+}) {
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const [isPolling, setIsPolling] = useState(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [scopeLogs, setScopeLogs] = useState<LogEntry[]>([]);
 
-  const fetchLogs = useCallback(async () => {
+  const fetchScopeLogs = useCallback(async () => {
     if (!isConnected) return;
     try {
       const response = await fetch(`${getBackendUrl()}${SCOPE_API_URL}/logs`);
       if (response.ok) {
         const data = await response.json();
         if (data.logs) {
-          setLogs((prev) => [...prev, ...data.logs].slice(-100));
+          setScopeLogs((prev) => [...prev, ...data.logs].slice(-100));
         }
       }
     } catch (err) {
-      console.error("Failed to fetch logs:", err);
+      console.error("Failed to fetch scope logs:", err);
     }
   }, [isConnected]);
 
   useEffect(() => {
     if (isConnected && !pollIntervalRef.current) {
       setIsPolling(true);
-      fetchLogs();
-      pollIntervalRef.current = setInterval(fetchLogs, 3000);
+      fetchScopeLogs();
+      pollIntervalRef.current = setInterval(fetchScopeLogs, 3000);
     }
 
     return () => {
@@ -839,38 +989,90 @@ function LogPanel({ isConnected }: { isConnected: boolean }) {
       }
       setIsPolling(false);
     };
-  }, [isConnected, fetchLogs]);
+  }, [isConnected, fetchScopeLogs]);
+
+  // Combine agent logs with scope logs
+  const allLogs = [
+    ...(scopeLogs.map(l => ({
+      id: `scope-${l.timestamp}`,
+      timestamp: new Date(l.timestamp),
+      agent: l.source,
+      type: "system" as const,
+      content: l.message,
+    }))),
+    ...(logs || []),
+  ].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+  }, [allLogs.length]);
 
-  const clearLogs = () => setLogs([]);
+  const AGENT_COLORS: Record<string, string> = {
+    echo: "#06b6d4",
+    vesper: "#ec4899",
+    riley: "#f97316",
+    maya: "#a855f7",
+    luna: "#22c55e",
+  };
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  };
 
   return (
     <div className="mt-4 space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-wider text-white/50">Agent Log</div>
-        <button
-          onClick={clearLogs}
-          className="text-[9px] uppercase tracking-wider text-white/40 hover:text-white/70"
-        >
-          Clear
-        </button>
+        <div className="text-[10px] uppercase tracking-wider text-white/50">Agent Logs</div>
+        <div className="flex items-center gap-2">
+          {userOverrideActive && onResumeAgent && (
+            <button
+              onClick={onResumeAgent}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-[9px] text-green-400 transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Resume
+            </button>
+          )}
+          <button
+            onClick={onClearLogs}
+            className="text-[9px] uppercase tracking-wider text-white/40 hover:text-white/70 flex items-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" />
+            Clear
+          </button>
+        </div>
       </div>
 
+      {userOverrideActive && (
+        <div className="px-3 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+          <span className="text-[10px] text-yellow-400">
+            User control active - Agent paused
+          </span>
+        </div>
+      )}
+
       <div className="rounded-lg border border-white/10 bg-black/30 max-h-[300px] overflow-y-auto">
-        {logs.length === 0 ? (
+        {allLogs.length === 0 ? (
           <div className="p-4 text-center text-[10px] text-white/40">
-            {isPolling ? "Waiting for logs..." : "Not connected"}
+            {isPolling ? "Agent logs will appear here..." : "Start stream to begin"}
           </div>
         ) : (
           <div className="divide-y divide-white/5">
-            {logs.map((log, idx) => (
-              <div key={idx} className="px-3 py-1.5 text-[9px] font-mono">
-                <span className="text-white/30">[{log.timestamp}]</span>{" "}
-                <span className="text-yellow-400">[{log.source}]</span>{" "}
-                <span className="text-white/60">{log.message}</span>
+            {allLogs.map((log) => (
+              <div key={log.id} className="px-3 py-1.5 text-[9px] font-mono">
+                <span className="text-white/30">[{formatTime(log.timestamp)}]</span>{" "}
+                <span 
+                  className="font-medium"
+                  style={{ color: AGENT_COLORS[log.agent.toLowerCase()] || "#ffffff" }}
+                >
+                  [{log.agent.toUpperCase()}]
+                </span>{" "}
+                <span className="text-white/60">{log.content}</span>
               </div>
             ))}
             <div ref={logsEndRef} />

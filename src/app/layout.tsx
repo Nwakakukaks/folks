@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Raleway } from "next/font/google";
 import { Toaster } from "sonner";
 import { PipelineSchemasProvider } from "@/context/PipelineSchemasContext";
+import { ScopeSessionProvider } from "@/context/ScopeSessionContext";
+import { AudioPlayerProvider } from "@/context/AudioPlayerContext";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -26,9 +28,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={raleway.variable}>
       <body className="font-sans antialiased">
-        <PipelineSchemasProvider>
-          {children}
-        </PipelineSchemasProvider>
+        <AudioPlayerProvider>
+          <PipelineSchemasProvider>
+            <ScopeSessionProvider>{children}</ScopeSessionProvider>
+          </PipelineSchemasProvider>
+        </AudioPlayerProvider>
         <Toaster position="bottom-right" richColors />
       </body>
     </html>

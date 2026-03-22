@@ -1,4 +1,4 @@
-"""OpenScope Backend API."""
+"""Folks Backend API."""
 
 import os
 from contextlib import asynccontextmanager
@@ -18,6 +18,7 @@ from .routers import (
     sample_plugins,
     outputs,
     logs,
+    agents,
 )
 from .config import settings
 
@@ -26,7 +27,7 @@ from .config import settings
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    print("Starting OpenScope Backend...")
+    print("Starting Folks Backend...")
 
     # Ensure templates directory exists
     templates_dir = Path(__file__).parent / "templates"
@@ -35,11 +36,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("Shutting down OpenScope Backend...")
+    print("Shutting down Folks Backend...")
 
 
 app = FastAPI(
-    title="OpenScope API",
+    title="Folks API",
     description="Visual plugin builder for Daydream Scope",
     version="0.1.0",
     lifespan=lifespan,
@@ -59,6 +60,7 @@ app.include_router(api.router, prefix="/api")
 app.include_router(templates.router, prefix="/api/templates")
 app.include_router(github.router, prefix="/api/github")
 app.include_router(ai.router, prefix="/api/ai")
+app.include_router(agents.router, prefix="/api/agents")
 app.include_router(pipelines.router, prefix="/api/scope")
 app.include_router(plugins.router, prefix="/api/scope")
 app.include_router(outputs.router, prefix="/api/scope")

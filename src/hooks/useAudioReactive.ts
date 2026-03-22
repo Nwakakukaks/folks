@@ -60,6 +60,7 @@ interface UseAudioReactiveOptions {
   sourceStream: MediaStream | null;
   onMetrics?: (metrics: AudioReactiveMetrics) => void;
   fftSize?: number;
+  updateIntervalMs?: number;
 }
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
@@ -150,6 +151,7 @@ export function useAudioReactive({
   sourceStream,
   onMetrics,
   fftSize = 2048,
+  updateIntervalMs = 100,
 }: UseAudioReactiveOptions) {
   const [metrics, setMetrics] = useState<AudioReactiveMetrics>({
     subBass: 0, bass: 0, lowMids: 0, mids: 0, upperMids: 0, highs: 0,
@@ -430,22 +432,26 @@ export function useAudioReactive({
     }
 
     let animationId: number;
+    let lastUpdateAt = 0;
     let frameCount = 0;
 
-    const analyze = () => {
-      const result = processAudio();
-      if (result) {
-        if (frameCount % 60 === 0) {
-          console.log("[AudioReactive] Metrics update:", {
-            overall: result.overall.toFixed(3),
-            mood: result.mood,
-            beat: result.beatDetected,
-            tempo: result.tempo.toFixed(1),
-          });
+    const analyze = (now: number) => {
+      if (now - lastUpdateAt >= updateIntervalMs) {
+        lastUpdateAt = now;
+        const result = processAudio();
+        if (result) {
+          if (frameCount % 20 === 0) {
+            console.log("[AudioReactive] Metrics update:", {
+              overall: result.overall.toFixed(3),
+              mood: result.mood,
+              beat: result.beatDetected,
+              tempo: result.tempo.toFixed(1),
+            });
+          }
+          frameCount++;
+          setMetrics(result);
+          onMetrics?.(result);
         }
-        frameCount++;
-        setMetrics(result);
-        onMetrics?.(result);
       }
       animationId = requestAnimationFrame(analyze);
     };
@@ -457,7 +463,7 @@ export function useAudioReactive({
       console.log("[AudioReactive] Stopping analysis loop");
       cancelAnimationFrame(animationId);
     };
-  }, [enabled, processAudio, onMetrics]);
+  }, [enabled, processAudio, onMetrics, updateIntervalMs]);
 
   return {
     metrics,

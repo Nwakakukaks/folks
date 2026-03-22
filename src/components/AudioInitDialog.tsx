@@ -38,9 +38,9 @@ export default function AudioInitDialog({ isOpen, onConfirm }: AudioInitDialogPr
       ref={dialogRef}
       className="fixed inset-0 z-[9999] flex items-center justify-center" 
     >
-      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/10 backdrop-blur-sm" />
 
-      <div className="relative w-full max-w-md mx-4 bg-[#0f0f10] rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-md mx-4 bg-[#242425] rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
         <div className="p-8 text-center">
           <div className="w-16 h-16 mx-auto mb-6 rounded-full border-2 border-yellow-500/50 flex items-center justify-center bg-yellow-500/10 animate-pulse">
             <Volume2 className="w-8 h-8 text-yellow-500" />

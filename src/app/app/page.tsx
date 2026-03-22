@@ -2,14 +2,14 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import MiniHeader from "@/components/MiniHeader";
+import EffectVideoPlayer from "@/components/EffectVideoPlayer";
 import ShowDisplay from "@/components/ShowDisplay";
 import AuthModal from "@/components/AuthModal";
 import OnboardingModal, { ShowSettings, loadSettings } from "@/components/OnboardingModal";
 import SetControlHub, { ActiveControlPanel } from "@/components/SetControlHub";
 import ControlDrawerContent, { getPanelTitle } from "@/components/ControlDrawerContent";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import EffectVideoPlayer from "@/components/EffectVideoPlayer";
-import HLSVideoPlayer from "@/components/HLSVideoPlayer";
+import HLSPlayer from "@/components/HLSPlayer";
 import { useScopeSession } from "@/context/ScopeSessionContext";
 import { useAgentBrain, AgentLog } from "@/hooks/useAgentBrain";
 import { useAudioExtractor } from "@/hooks/useAudioExtractor";
@@ -17,11 +17,11 @@ import { useAudioReactive } from "@/hooks/useAudioReactive";
 import { useAudioPlayer } from "@/context/AudioPlayerContext";
 import { supabase } from "@/lib/supabase";
 import { showError, showInfo } from "@/lib/toast";
-import { Play } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { Agent, AGENTS } from "@/components/AgentSprite";
 
 type ContentMode = "show" | "output";
-const HLS_URL = "https://nyc-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=955409166";
+const HLS_URL = "https://mdw-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=3158657102";
 
 export default function AppPage() {
   const [user, setUser] = useState<{ email?: string; avatar_url?: string } | null>(null);
@@ -33,13 +33,22 @@ export default function AppPage() {
   const [activePanel, setActivePanel] = useState<ActiveControlPanel>(null);
   const outputVideoRef = useRef<HTMLVideoElement>(null);
   const outputMainVideoRef = useRef<HTMLVideoElement>(null);
-  const effectStreamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const agentIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const scopeStartInFlightRef = useRef(false);
+  const scopeRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const scopeStartWatchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const effectStreamRef = useRef<MediaStream | null>(null);
+  const webcamStreamRef = useRef<MediaStream | null>(null);
+  const fileVideoRef = useRef<HTMLVideoElement | null>(null);
+  const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [inputSource, setInputSource] = useState<'webcam' | 'file' | 'hls'>('hls');
+  const isMountedRef = useRef(false);
 
   const {
     isConnected,
     isConnecting,
+    error: scopeError,
     startWebRTC,
     stopWebRTC,
     loadPipeline,
@@ -52,8 +61,9 @@ export default function AppPage() {
     remoteStream,
   } = useScopeSession();
 
+  const [hasStartedStream, setHasStartedStream] = useState(false);
+
   const [selectedPipeline, setSelectedPipeline] = useState<string>("");
-  const [inputSource, setInputSource] = useState<'webcam' | 'file' | 'hls'>('hls');
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
@@ -65,6 +75,8 @@ export default function AppPage() {
 
   const { audioStream, initAudio, isReady: audioReady } = useAudioExtractor({
     hlsUrl: inputSource === 'hls' ? HLS_URL : undefined,
+    micStream: inputSource === 'webcam' ? webcamStreamRef.current : null,
+    videoElement: inputSource === 'file' && fileVideoRef.current ? fileVideoRef.current : undefined,
   });
 
   useEffect(() => {
@@ -148,7 +160,7 @@ export default function AppPage() {
             dominantRange: "mids",
           },
           current_state: {
-            pipeline: "longlive",
+            pipeline: "passthrough",
             parameters: {},
             plugins: [],
             mood: currentMood,
@@ -160,7 +172,7 @@ export default function AppPage() {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[Agent] Reasoning failed: ${response.status} - ${errorText}`);
-        
+
         if (response.status === 429) {
           const retryMatch = errorText.match(/try again in ([\d.]+)s/);
           const retryDelay = retryMatch ? parseFloat(retryMatch[1]) * 1000 : 2000;
@@ -193,7 +205,10 @@ export default function AppPage() {
           if (action.type === "send_prompt" && action.prompt) {
             setAgentPrompt(action.prompt);
             sendParameterUpdate({
-              prompts: [{ text: action.prompt, weight: 1.0 }],
+              transition: {
+                target_prompts: [{ text: action.prompt, weight: 1.0 }],
+                num_steps: 8
+              }
             });
             setAgentLogs(prev => [{
               id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -219,11 +234,104 @@ export default function AppPage() {
     }
   }, [selectedAgent, audioMetrics, currentMood, selectedEffect, isStreaming, sendParameterUpdate]);
 
+  const connectToScope = useCallback(async () => {
+    if (scopeStartInFlightRef.current) {
+      return;
+    }
+
+    // Don't reset if already streaming - just keep the existing stream
+    const wasAlreadyStreaming = hasStartedStream;
+    
+    scopeStartInFlightRef.current = true;
+    setIsScopeConnected(false);
+    if (!wasAlreadyStreaming) {
+      setHasStartedStream(false);
+    }
+
+    try {
+      if (scopeStartWatchdogRef.current) {
+        clearTimeout(scopeStartWatchdogRef.current);
+        scopeStartWatchdogRef.current = null;
+      }
+
+      const initialParameters: Record<string, unknown> = {
+        input_mode: "video",
+        pipeline_ids: ["kaleido-scope"],
+        prompts: [{ text: agentPrompt, weight: 1.0 }],
+      };
+
+      await loadPipeline(["kaleido-scope"], { input_mode: "video" });
+
+      if (!effectStreamRef.current) {
+        console.log("[Scope] Waiting for effect video stream...");
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 10000);
+          const checkInterval = setInterval(() => {
+            if (effectStreamRef.current) {
+              clearTimeout(timeout);
+              clearInterval(checkInterval);
+              resolve();
+            }
+          }, 100);
+        });
+      }
+
+      if (!effectStreamRef.current) {
+        showError("Effect video not ready", "Please try again");
+        return;
+      }
+
+      await startWebRTC(
+        (remoteStream) => {
+          console.log("[Scope] Remote stream received");
+          if (outputVideoRef.current) {
+            outputVideoRef.current.srcObject = remoteStream;
+            outputVideoRef.current.play().catch(console.error);
+          }
+          if (outputMainVideoRef.current) {
+            outputMainVideoRef.current.srcObject = remoteStream;
+            outputMainVideoRef.current.play().catch(console.error);
+          }
+          if (scopeStartWatchdogRef.current) {
+            clearTimeout(scopeStartWatchdogRef.current);
+            scopeStartWatchdogRef.current = null;
+          }
+          setIsScopeConnected(true);
+          setHasStartedStream(true);
+          console.log("[Scope] Session started successfully!");
+        },
+        initialParameters,
+        effectStreamRef.current
+      );
+
+      scopeStartWatchdogRef.current = setTimeout(() => {
+        if (!remoteStream) {
+          console.warn("[Scope] App stream watchdog triggered, scheduling retry...");
+          setIsScopeConnected(false);
+          stopWebRTC();
+        }
+      }, 35000) as unknown as NodeJS.Timeout;
+    } catch (error) {
+      console.error("Scope connection error:", error);
+      setIsScopeConnected(false);
+    } finally {
+      scopeStartInFlightRef.current = false;
+    }
+  }, [loadPipeline, startWebRTC, agentPrompt, remoteStream, stopWebRTC]);
+
   const handleStreamToggle = useCallback(() => {
     if (isStreaming) {
       if (agentIntervalRef.current) {
         clearInterval(agentIntervalRef.current);
         agentIntervalRef.current = null;
+      }
+      if (scopeRetryTimerRef.current) {
+        clearTimeout(scopeRetryTimerRef.current);
+        scopeRetryTimerRef.current = null;
+      }
+      if (scopeStartWatchdogRef.current) {
+        clearTimeout(scopeStartWatchdogRef.current);
+        scopeStartWatchdogRef.current = null;
       }
       stopWebRTC();
       setIsScopeConnected(false);
@@ -231,52 +339,54 @@ export default function AppPage() {
       showInfo("Agent stopped");
     } else {
       if (validatePrerequisites()) {
-        initAudio();
         setIsStreaming(true);
         showInfo(`Starting ${selectedAgent?.name}...`);
-
+        connectToScope();
         callAgentReasoning();
         agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
       }
     }
-  }, [isStreaming, validatePrerequisites, selectedAgent, initAudio, callAgentReasoning, stopWebRTC]);
+  }, [isStreaming, validatePrerequisites, selectedAgent, callAgentReasoning, stopWebRTC, connectToScope]);
 
   const handleInputSourceChange = useCallback((source: "webcam" | "file" | "hls") => {
     setInputSource(source);
-  }, []);
-
-  const handleVideoStreamReady = useCallback((stream: MediaStream | null) => {
-    effectStreamRef.current = stream;
-  }, []);
-
-  const connectToScope = useCallback(async (stream?: MediaStream | null) => {
-    if (!stream) return;
-
-    try {
-      const initialParameters: Record<string, unknown> = {
-        input_mode: "video",
-        pipeline_ids: ["longlive"],
-        prompts: [{ text: agentPrompt, weight: 1.0 }],
-      };
-
-      await loadPipeline(["longlive"], { input_mode: "video" });
-
-      await startWebRTC(
-        () => undefined,
-        initialParameters,
-        stream
-      );
-
-      setIsScopeConnected(true);
-    } catch (error) {
-      console.error("Scope connection error:", error);
+    if (hasStartedStream) {
+      connectToScope();
     }
-  }, [loadPipeline, startWebRTC, agentPrompt]);
+  }, [hasStartedStream]);
+
+  const handleInputStreamReady = useCallback((stream: MediaStream | null) => {
+    webcamStreamRef.current = stream;
+    setInputSource('webcam');
+    // Create a video element to display the stream
+    if (stream && webcamVideoRef.current) {
+      webcamVideoRef.current.srcObject = stream;
+    }
+    if (hasStartedStream) {
+      connectToScope();
+    }
+  }, [hasStartedStream]);
+
+  const handleFileVideoReady = useCallback((stream: MediaStream | null, videoElement: HTMLVideoElement) => {
+    fileVideoRef.current = videoElement;
+    setInputSource('file');
+    if (hasStartedStream) {
+      connectToScope();
+    }
+  }, [hasStartedStream]);
 
   const disconnectFromScope = useCallback(() => {
     stopWebRTC();
     setIsScopeConnected(false);
+    setHasStartedStream(false);
   }, [stopWebRTC]);
+
+  const handleRetry = useCallback(() => {
+    stopWebRTC();
+    setTimeout(() => {
+      connectToScope();
+    }, 100);
+  }, [stopWebRTC, connectToScope]);
 
   const scopeInterface = useMemo(() => ({
     sendParameter: (params: Record<string, unknown>) => {
@@ -291,7 +401,7 @@ export default function AppPage() {
     configureNDI: async (enabled: boolean, name: string) => {
       showInfo(`${enabled ? "Enabling" : "Disabling"} NDI: ${name}`);
     },
-    getCurrentPipeline: () => activePipeline || selectedPipeline || "longlive",
+    getCurrentPipeline: () => activePipeline || selectedPipeline || "passthrough",
     getCurrentParameters: () => ({}),
     getCurrentPlugins: () => [],
   }), [sendParameterUpdate, loadPipeline, activePipeline, selectedPipeline]);
@@ -308,21 +418,19 @@ export default function AppPage() {
     setSelectedEffect(effect);
   }, []);
 
-  useEffect(() => {
-    if (effectStreamRef.current && isConnected && isStreaming && !isScopeConnected) {
-      connectToScope(effectStreamRef.current);
-    }
-  }, [effectStreamRef.current, isConnected, isStreaming, isScopeConnected, connectToScope]);
+  const handleEffectStreamReady = useCallback((stream: MediaStream) => {
+    effectStreamRef.current = stream;
+    console.log("[Effect] Stream ready:", stream.getVideoTracks().length, "video tracks");
+  }, []);
 
+  // Auto-start when connected to Scope (mirrors home page behavior)
   useEffect(() => {
-    if (audioReady && effectStreamRef.current && isConnected && isStreaming && !isScopeConnected) {
-      connectToScope(effectStreamRef.current);
+    if (!isConnected) return;
+    if (!hasStartedStream && !scopeStartInFlightRef.current) {
+      console.log("[Scope] Connected and no stream yet, triggering connectToScope");
+      connectToScope();
     }
-  }, [audioReady, isConnected, isStreaming, isScopeConnected, connectToScope]);
-
-  useEffect(() => {
-    fetchPipelines();
-  }, [fetchPipelines]);
+  }, [isConnected, hasStartedStream]);
 
   useEffect(() => {
     if (outputVideoRef.current && remoteStream) {
@@ -331,7 +439,54 @@ export default function AppPage() {
     if (outputMainVideoRef.current && remoteStream) {
       outputMainVideoRef.current.srcObject = remoteStream;
     }
+    if (remoteStream) {
+      setIsScopeConnected(true);
+      setHasStartedStream(true);
+    }
   }, [remoteStream]);
+
+  useEffect(() => {
+    if (!isStreaming || !isConnected || remoteStream) {
+      if (scopeRetryTimerRef.current) {
+        clearTimeout(scopeRetryTimerRef.current);
+        scopeRetryTimerRef.current = null;
+      }
+      return;
+    }
+
+    scopeRetryTimerRef.current = setTimeout(() => {
+      console.log("[Scope] No output stream yet in app, retrying connection...");
+      connectToScope();
+    }, 15000) as unknown as NodeJS.Timeout;
+
+    return () => {
+      if (scopeRetryTimerRef.current) {
+        clearTimeout(scopeRetryTimerRef.current);
+        scopeRetryTimerRef.current = null;
+      }
+    };
+  }, [isStreaming, isConnected, remoteStream, connectToScope]);
+
+  useEffect(() => {
+    return () => {
+      if (scopeRetryTimerRef.current) {
+        clearTimeout(scopeRetryTimerRef.current);
+      }
+      if (scopeStartWatchdogRef.current) {
+        clearTimeout(scopeStartWatchdogRef.current);
+      }
+      if (hasStartedStream) {
+        stopWebRTC();
+      }
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach(t => t.stop());
+        webcamStreamRef.current = null;
+      }
+      if (agentIntervalRef.current) {
+        clearInterval(agentIntervalRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -416,9 +571,6 @@ export default function AppPage() {
         mode={contentMode}
         onModeChange={setContentMode}
         onAuthClick={() => setShowAuthModal(true)}
-        isStreaming={isStreaming}
-        onStreamToggle={handleStreamToggle}
-        agentName={selectedAgent?.name}
       />
 
       <div className="flex-1 flex pt-16 min-h-0 relative">
@@ -434,33 +586,74 @@ export default function AppPage() {
               <div className="absolute bottom-32 inset-x-0 z-20 px-6">
                 <div className="mx-auto w-[min(980px,92vw)] space-y-3">
                   <div className="grid w-full gap-3 md:grid-cols-2">
-                    <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
-                      {remoteStream ? (
-                        <video
-                          ref={outputVideoRef}
-                          autoPlay
-                          muted
-                          playsInline
-                          className="h-full w-full object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-white/40">
+                    <div className="relative h-[350px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+                      <video
+                        ref={outputMainVideoRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        className="h-full w-full object-contain"
+                      />
+                      {!hasStartedStream && !scopeError && (isStreaming || isConnecting || isLoadingPipeline) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                           <div className="text-center">
-                            <Play className="mx-auto mb-3 h-10 w-10" />
-                            <p className="text-xs uppercase tracking-[0.25em]">No Output Stream</p>
+                            <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin" />
+                            <p className="text-xs uppercase tracking-[0.25em]">
+                              {isLoadingPipeline ? "Loading Pipeline..." : "Connecting To Scope..."}
+                            </p>
                           </div>
                         </div>
                       )}
+                      {scopeError && !isConnecting && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
+                          <div className="h-10 w-10 rounded-full border-2 border-red-500/50 flex items-center justify-center">
+                            <span className="text-red-500 text-lg">!</span>
+                          </div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-red-500/70">Scope Server Unavailable</p>
+                          <p className="text-[10px] text-white/40 max-w-[200px] text-center px-2">{scopeError}</p>
+                          <button
+                            onClick={handleRetry}
+                            className="mt-1 px-3 py-1.5 border border-white/20 rounded-full text-[10px] uppercase tracking-wider hover:bg-white/10"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="absolute left-3 top-3 flex items-center gap-2 text-[9px] uppercase tracking-[0.25em] text-white/70">
+                        <span
+                          className={`inline-flex h-2 w-2 rounded-full ${hasStartedStream || isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`}
+                        />
+                        {hasStartedStream ? "Live" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
+                      </div>
                     </div>
-                    {contentMode === "show" && (
-                      <div className="h-[280px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
-                        <HLSVideoPlayer
-                          playerId="app-show"
+                    <div className="h-[350px] overflow-hidden rounded-xl border border-gray-800 bg-black/55 shadow-[0_0_24px_rgba(236,72,153,0.12)]">
+                      {inputSource === 'hls' && (
+                        <HLSPlayer
                           src={HLS_URL}
+                          muted
                           className="w-full h-full"
                         />
-                      </div>
-                    )}
+                      )}
+                      {inputSource === 'webcam' && (
+                        <video
+                          ref={webcamVideoRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="w-full h-full object-contain"
+                        />
+                      )}
+                      {inputSource === 'file' && (
+                        <video
+                          ref={fileVideoRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="w-full h-full object-contain"
+                        />
+                      )}
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-white/10 bg-black/40 p-3 backdrop-blur-md">
@@ -484,29 +677,72 @@ export default function AppPage() {
 
               <div className="relative mx-auto h-full w-full max-w-[1200px]">
                 <div className="relative mx-auto h-[85vh] min-h-[380px] overflow-hidden rounded-2xl border border-white/10 bg-black/85">
-                  {remoteStream ? (
-                    <video
-                      ref={outputMainVideoRef}
-                      autoPlay
-                      muted
-                      playsInline
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-white/40">
+                  <video
+                    ref={outputMainVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="h-full w-full object-contain"
+                  />
+                  {!hasStartedStream && !scopeError && (isStreaming || isConnecting || isLoadingPipeline) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                       <div className="text-center">
-                        <Play className="mx-auto mb-3 h-10 w-10" />
-                        <p className="text-xs uppercase tracking-[0.25em]">No Output Stream</p>
+                        <Loader2 className="mx-auto mb-3 h-10 w-10 animate-spin" />
+                        <p className="text-xs uppercase tracking-[0.25em]">
+                          {isLoadingPipeline ? "Loading Pipeline..." : "Connecting To Scope..."}
+                        </p>
                       </div>
                     </div>
                   )}
+                  {scopeError && !isConnecting && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
+                      <div className="h-10 w-10 rounded-full border-2 border-red-500/50 flex items-center justify-center">
+                        <span className="text-red-500 text-lg">!</span>
+                      </div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-red-500/70">Scope Server Unavailable</p>
+                      <p className="text-[10px] text-white/40 max-w-xs text-center px-2">{scopeError}</p>
+                      <button
+                        onClick={handleRetry}
+                        className="mt-1 px-3 py-1.5 border border-white/20 rounded-full text-[10px] uppercase tracking-wider hover:bg-white/10"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="absolute left-4 top-4 flex items-center gap-2 text-[10px] uppercase tracking-[0.25em] text-white/70">
+                    <span
+                      className={`inline-flex h-2 w-2 rounded-full ${hasStartedStream || isConnected ? "bg-green-500" : isConnecting ? "bg-yellow-500 animate-pulse" : "bg-red-500"}`}
+                    />
+                    {hasStartedStream ? "Live" : isConnecting ? "Connecting" : isConnected ? "Ready" : "Offline"}
+                  </div>
                   {contentMode === "output" && (
                     <div className="absolute bottom-4 right-4 z-30 h-48 w-72 overflow-hidden rounded-lg border-2 border-white/30 bg-black shadow-xl">
-                      <HLSVideoPlayer
-                        playerId="app-output"
-                        src={HLS_URL}
-                        className="w-full h-full"
-                      />
+                      {inputSource === 'hls' && (
+                        <HLSPlayer
+                          src={HLS_URL}
+                          muted
+                          className="w-full h-full"
+                        />
+                      )}
+                      {inputSource === 'webcam' && (
+                        <video
+                          ref={(el) => { if (el && webcamVideoRef.current !== el) webcamVideoRef.current = el; }}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="w-full h-full object-contain"
+                        />
+                      )}
+                      {inputSource === 'file' && (
+                        <video
+                          ref={(el) => { if (el && fileVideoRef.current !== el) fileVideoRef.current = el; }}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="w-full h-full object-contain"
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -515,11 +751,6 @@ export default function AppPage() {
           )}
         </div>
       </div>
-
-      <EffectVideoPlayer
-        activeEffect={selectedEffect}
-        onStreamReady={handleVideoStreamReady}
-      />
 
       <Sheet open={!!drawerPanel} onOpenChange={(open) => !open && setActivePanel(null)}>
         <SheetContent onClose={() => setActivePanel(null)}>
@@ -544,7 +775,8 @@ export default function AppPage() {
                 configSchema={configSchema}
                 onParamChange={handleParamChange}
                 sendParameterUpdate={sendParameterUpdate}
-                onStreamReady={() => { }}
+                onStreamReady={handleInputStreamReady}
+                onFileStreamReady={handleFileVideoReady}
                 onInputSourceChange={handleInputSourceChange}
               />
             </>
@@ -552,16 +784,18 @@ export default function AppPage() {
         </SheetContent>
       </Sheet>
 
+      <EffectVideoPlayer
+        activeEffect={selectedEffect}
+        onStreamReady={handleEffectStreamReady}
+        width={576}
+        height={320}
+        fps={15}
+      />
+
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
         onAuthSuccess={handleAuthSuccess}
-      />
-
-      <OnboardingModal
-        isOpen={showOnboarding}
-        onClose={() => setShowOnboarding(false)}
-        onComplete={handleOnboardingComplete}
       />
 
       <OnboardingModal

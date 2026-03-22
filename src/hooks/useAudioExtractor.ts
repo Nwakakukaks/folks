@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 export interface UseAudioExtractorOptions {
   hlsUrl?: string;
   micStream?: MediaStream | null;
+  videoElement?: HTMLVideoElement;
   preferMicOverHls?: boolean;
   onAudioReady?: (stream: MediaStream) => void;
 }
@@ -27,6 +28,7 @@ interface VideoElement extends HTMLVideoElement {
 export function useAudioExtractor({
   hlsUrl,
   micStream,
+  videoElement,
   preferMicOverHls = true,
   onAudioReady,
 }: UseAudioExtractorOptions): UseAudioExtractorReturn {
@@ -83,8 +85,73 @@ export function useAudioExtractor({
   const initAudio = useCallback(() => {
     console.log("[AudioExtractor] initAudio called, already initialized:", audioInitializedRef.current);
     if (audioInitializedRef.current) return;
+
+    const initFromVideoElement = (video: HTMLVideoElement) => {
+      console.log("[AudioExtractor] Initializing from video element for audio extraction");
+      audioInitializedRef.current = true;
+      setIsLoading(true);
+      
+      const startExtraction = async () => {
+        try {
+          await video.play();
+          const stream = createAudioStreamFromVideoElement(video as VideoElement);
+          if (stream) {
+            console.log("[AudioExtractor] Video element audio stream created");
+            setAudioStream(stream);
+            setCurrentSource("mic");
+            setIsLoading(false);
+            setIsReady(true);
+            onAudioReady?.(stream);
+          } else {
+            console.warn("[AudioExtractor] Failed to create audio stream from video element");
+            setIsLoading(false);
+          }
+        } catch (err) {
+          console.error("[AudioExtractor] Failed to play video element:", err);
+          setIsLoading(false);
+        }
+      };
+
+      if (video.readyState >= 2) {
+        startExtraction();
+      } else {
+        video.onloadedmetadata = () => startExtraction();
+        video.onerror = () => {
+          console.error("[AudioExtractor] Video element load error");
+          setIsLoading(false);
+        };
+      }
+    };
+
+    const initFromMicStream = (stream: MediaStream) => {
+      console.log("[AudioExtractor] Initializing from mic stream");
+      audioInitializedRef.current = true;
+      
+      if (stream.getAudioTracks().length > 0) {
+        setAudioStream(stream);
+        setCurrentSource("mic");
+        setIsReady(true);
+        onAudioReady?.(stream);
+      } else {
+        console.warn("[AudioExtractor] No audio tracks in mic stream");
+      }
+    };
+
+    // Priority: videoElement > micStream > hlsUrl
+    if (videoElement) {
+      console.log("[AudioExtractor] Using video element for audio extraction");
+      initFromVideoElement(videoElement);
+      return;
+    }
+
+    if (micStream) {
+      console.log("[AudioExtractor] Using mic stream for audio");
+      initFromMicStream(micStream);
+      return;
+    }
+
     if (!hlsUrl) {
-      console.log("[AudioExtractor] No HLS URL provided");
+      console.log("[AudioExtractor] No audio source provided");
       return;
     }
     
@@ -95,7 +162,9 @@ export function useAudioExtractor({
 
     const video = document.createElement("video") as VideoElement;
     video.crossOrigin = "anonymous";
-    video.muted = false;
+    video.muted = true;
+    video.defaultMuted = true;
+    video.volume = 0;
     video.playsInline = true;
     hlsVideoRef.current = video;
 
