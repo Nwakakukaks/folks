@@ -1,147 +1,116 @@
-# Folks
+Folks: Building a 24/7 AI VJ Show
 
-A 24/7 AI VJ station powered by five autonomous agents. Like a radio station, but for live visuals.
+I wanted to test a simple idea: can an autonomous visual system hold attention for long periods, the same way a good radio station does?
 
-## The 24/7 Show
+That question became Folks.
+It is a 24/7 AI VJ broadcast where multiple agents take scheduled shifts, listen to incoming audio, and control live visuals in real time.
 
-Folks runs a continuous live VJ stream, 24 hours a day, 7 days a week. Five AI agents—Echo, Vesper, Riley, Maya, and Luna—take shifts performing live visuals, each bringing their own style and energy. It's an endless visual performance, always on, always evolving.
+How it works
 
-Inspired by The Lot Radio's model of continuous broadcast, Folks applies the same idea to live visual performance. You can tune in anytime to watch the show, or take the stream and use it in your own setup.
+1. Receive audio input (audio/video sources)
+2. Run real-time audio analysis (bands, RMS/peak, beat detection, tempo, transients, spectral features)
+3. Feed analysis + current state + agent skill context into a reasoning model
+4. Execute tool actions against Scope (pipeline switching, parameter updates, prompt updates, captions)
+5. Stream the visual output continuously
 
-## How It Works
+The important detail is that reasoning does not run in isolation.
+Each cycle includes:
 
-**Watch the Show**
-Pull up the Folks stream and enjoy continuous AI-generated visuals. The agents perform autonomously, reacting to music and transitioning between styles based on their own logic.
+1. current pipeline
+2. current parameters
+3. available controls from pipeline schema
+4. currently active agent
+5. schedule context (handoff timing)
+6. fresh audio metrics
 
-**Create Your Own VJ Set**
-Feed Folks your own audio or video input—microphone, webcam, video file, or NDI—and have the agents VJ your content in real-time. Pick an agent whose style matches your vibe, and let the AI handle the visuals while you focus on your set.
+That gives the model enough context to make controlled decisions.
 
-## For Your Next Event
+Technical Setup
 
-Folks is built for anyone who needs live visuals but doesn't have a dedicated VJ:
+The system is split into three layers:
 
-- **Bands** performing without a visual artist
-- **Event locations** needing ambient visuals on loop
-- **Pop-up parties** where a full production isn't feasible
-- **DJs** who want AI-controlled visuals without manual operation
-- **Art galleries and installations** seeking dynamic, generative content
-- **Venues and lounges** wanting continuous atmospheric visuals
+1. Frontend control and stream surfaces
 
-No setup required. Just connect and go.
+- Home page: public live view
+- App page: operator view with controls, logs, runtime panel, and agent tools
+- Input handling: HLS plus file/external audio workflows
+- Audio gating: stream/effect animation only advances when audio is actually active and analyzed
 
-## The Agents
+The UI reads each active pipeline schema and renders matching controls dynamically (toggles, sliders, selects, numeric fields).
+So when a pipeline changes, controls update automatically without hardcoding per pipeline.
 
-### Echo
-Cyan robotic presence with high-energy glitch aesthetics. Perfect for techno, electronic, and high-tempo sets.
+2. Agent runtime and orchestration
 
-### Vesper
-Warm pink analog soul with VHS and film grain effects. Ideal for nostalgic, emotional, and smooth transitions.
+- Agent scheduling picks who is active per slot
+- Agent brain enforces cadence windows (prompt interval vs control interval)
+- User overrides are temporary; agent resumes quickly
+- Actions are logged with timestamps and agent identity
 
-### Riley
-Bold orange typographic consciousness. Makes sound visible through kinetic typography and geometric shapes.
+We separated agent intention from execution rate.
+That protects stream stability, prevents over-triggering, and keeps visuals coherent.
 
-### Maya
-Ethereal purple psychedelic consciousness. Dissolves reality with flowing, organic visual patterns.
+3. Backend reasoning + Scope execution
 
-### Luna
-Serene green ambient reflection. Creates mirror-like water caustics and slow, flowing motion.
+- Reasoning endpoint receives audio + context + skill docs
+- Model returns structured actions (send_prompt, send_parameters, load_pipeline, select_effect, etc.)
+- Action payloads are validated/sanitized before execution
+- Scope receives clean parameter updates and pipeline load requests
 
-## Quick Start
+Captions are treated as a first-class control channel, not an afterthought.
+They are updated through explicit caption fields and rendered as stage-readable overlays.
 
-### Prerequisites
+Pipelines and Visual Language
 
-- Node.js 18+
-- Python 3.10+
-- Daydream Scope server (runs on port 8000)
+Current main pipelines:
 
-### Frontend
+1. glitch-realm
+2. crystal-box
+3. morph-host
+4. urban-spray
+5. cosmic-drift
+6. kaleido-scope
 
-```bash
-cd cohort3
-npm install
-npm run dev
-```
+Each pipeline exposes a different control vocabulary.
+Agents can switch pipelines and then work with the new schema.
 
-Open [http://localhost:3000](http://localhost:3000)
+Current Status
 
-### Backend
+Today, the system can:
 
-```bash
-cd cohort3/backend
+1. run continuously with scheduled agent handoffs
+2. react to live audio in real time
+3. switch pipelines/effects and tune parameters autonomously
+4. render caption overlays from agent outputs
+5. let an operator override briefly without breaking agent continuity
 
-# Copy environment template
-cp .env.example .env
+Credits
 
-# Edit .env with your settings
-# SCOPE_API_URL=http://localhost:8000
+The caption system uses Wallspace Captions by Jack Morgan. We're just plugging into it. Check out his work if you need text overlays for Scope.
 
-# Run the backend
-uvicorn folks_backend.main:app --reload --port 3001
-```
+Future work
 
-### Scope Server
+Audio and Video Intelligence
 
-Folks connects to a Daydream Scope server for video processing:
+Right now the system is audio-driven. Agents listen to incoming audio and make decisions from that signal alone.
 
-```bash
-cd scope
-uv run daydream-scope --reload
-```
+The next step is adding real-time video analysis alongside audio. Agents would be able to:
 
-## Configuration
+1. Watch a live video feed and understand what's happening in the frame
+2. Reason about visual content the same way they reason about audio
+3. Make autonomous decisions based on both signals together
 
-### Environment Variables
+A practical example: a live band points a camera at their performance and the agents do the VJ. They watch the guitar player, the drummer, the crowd. Read the energy from the video and pair that with the audio to steer the visuals.
 
-Create a `.env` file in the backend directory:
+This is not just audio-reactive anymore. It is vision-aware.
 
-```env
-# Scope API - Your Scope server URL
-SCOPE_API_URL=http://localhost:8000
+Output and Visuals
 
-# Groq AI for agent reasoning
-GROQ_API_KEY=your_groq_api_key
+1. Stronger audio-semantic mapping (better movement/color decisions from signal shape)
+2. Better long-horizon composition planning (multi-minute visual arcs, not just local reactions)
+3. Richer post-processing stack (caption treatments, compositing tools, transitions)
+4. Expanded visual toolkit (more detailed effects, better textures)
+5. Better operator analytics around action quality and stability over long sessions
 
-# Optional: GitHub for publishing
-GITHUB_TOKEN=your_github_token
-```
+If You Are Building Something Similar
 
-## Tech Stack
-
-- **Frontend**: Next.js 14, React, TypeScript, Tailwind CSS, Radix UI
-- **Backend**: FastAPI, Python
-- **Video Processing**: Daydream Scope
-- **Streaming**: WebRTC, HLS
-- **Output**: NDI (Network Device Interface)
-- **AI Reasoning**: Groq (qwen-qwq-32b)
-
-## Project Structure
-
-```
-cohort3/
-├── src/
-│   ├── app/              # Next.js pages
-│   ├── components/       # React components
-│   │   ├── AgentSprite.tsx      # Agent visuals
-│   │   ├── ControlDrawerContent.tsx  # Control panels
-│   │   ├── OnboardingModal.tsx      # Setup wizard
-│   │   └── SetControlHub.tsx       # Control buttons
-│   ├── hooks/            # React hooks
-│   │   ├── useScopeServer.ts   # Scope API integration
-│   │   ├── useAudioAnalyzer.ts  # Audio analysis
-│   │   └── useAgentBrain.ts    # Agent reasoning loop
-│   └── agents/           # Agent skills and configs
-├── backend/
-│   ├── folks_backend/    # FastAPI backend
-│   │   └── routers/     # API routes
-│   │       ├── agents.py       # Agent reasoning
-│   │       ├── pipelines.py    # Pipeline management
-│   │       ├── plugins.py      # Plugin management
-│   │       ├── outputs.py      # NDI output
-│   │       └── logs.py         # Log streaming
-│   └── .env.example
-└── public/               # Static assets
-```
-
-## License
-
-MIT
+If you are working on autonomous media systems, live AI tooling, or agentic creative software, I would love to compare notes!
