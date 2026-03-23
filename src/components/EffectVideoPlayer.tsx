@@ -13,6 +13,8 @@ export interface EffectInfo {
 interface EffectVideoPlayerProps {
   effects?: string[];
   activeEffect: number;
+  enabled?: boolean;
+  paused?: boolean;
   width?: number;
   height?: number;
   onEffectChange?: (effectNumber: number) => void;
@@ -51,28 +53,24 @@ function loadEffectVideo(
     video.loop = true;
     video.muted = true;
     video.playsInline = true;
-    video.preload = "auto";
+    video.preload = "metadata";
     video.src = url;
 
     const timeout = setTimeout(() => {
       reject(new Error(`Timeout loading effect ${effectNumber}`));
-    }, 10000);
+    }, 15000);
 
-    video.onloadeddata = () => {
+    const settle = () => {
       clearTimeout(timeout);
-      console.log(`[EffectVideo] Effect ${effectNumber} loaded`);
       resolve(video);
     };
 
-    video.oncanplaythrough = () => {
-      clearTimeout(timeout);
-      console.log(`[EffectVideo] Effect ${effectNumber} ready to play`);
-      resolve(video);
-    };
+    video.onloadedmetadata = settle;
+
+    video.onloadeddata = settle;
 
     video.onerror = () => {
       clearTimeout(timeout);
-      console.error(`[EffectVideo] Failed to load effect ${effectNumber}`);
       reject(new Error(`Failed to load effect ${effectNumber}`));
     };
 
@@ -83,6 +81,8 @@ function loadEffectVideo(
 export default function EffectVideoPlayer({
   effects = DEFAULT_EFFECTS,
   activeEffect,
+  enabled = true,
+  paused = false,
   width = 1280,
   height = 720,
   onStreamReady,
@@ -97,13 +97,16 @@ export default function EffectVideoPlayer({
   const isInitializedRef = useRef(false);
   const isLoadingRef = useRef<Record<number, boolean>>({});
   const currentActiveRef = useRef<number | null>(null);
+  const destroyedRef = useRef(false);
 
   const [loadState, setLoadState] = useState<Record<number, boolean>>({});
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [loadingEffect, setLoadingEffect] = useState<number | null>(null);
+  const [renderEffectNumber, setRenderEffectNumber] = useState<number>(1);
 
   const loadSingleEffect = useCallback(
     async (effectNumber: number): Promise<HTMLVideoElement | null> => {
+      if (!enabled || destroyedRef.current) return null;
       if (videoRefs.current.has(effectNumber)) {
         return videoRefs.current.get(effectNumber)!;
       }
@@ -123,24 +126,34 @@ export default function EffectVideoPlayer({
         if (!url) throw new Error(`No URL for effect ${effectNumber}`);
 
         const video = await loadEffectVideo(effectNumber, url, container);
+        if (destroyedRef.current || !enabled) {
+          video.pause();
+          video.src = "";
+          video.load();
+          return null;
+        }
         videoRefs.current.set(effectNumber, video);
         isLoadingRef.current[effectNumber] = false;
         setLoadState((prev) => ({ ...prev, [effectNumber]: true }));
         setLoadingEffect(null);
         return video;
       } catch (err) {
-        console.error(`[EffectVideo] Error loading effect ${effectNumber}:`, err);
+        if (!destroyedRef.current && enabled) {
+          console.warn(`[EffectVideo] Could not load effect ${effectNumber}`);
+        }
         isLoadingRef.current[effectNumber] = false;
         setLoadingEffect(null);
         return null;
       }
     },
-    [effects]
+    [effects, enabled]
   );
 
   useEffect(() => {
+    if (!enabled) return;
     if (isInitializedRef.current) return;
     isInitializedRef.current = true;
+    destroyedRef.current = false;
 
     const container = document.createElement("div");
     container.style.position = "absolute";
@@ -149,17 +162,29 @@ export default function EffectVideoPlayer({
     document.body.appendChild(container);
     containerRef.current = container;
 
-    const initialEffect = getRandomEffectIndex(effects.length);
-    currentActiveRef.current = initialEffect;
-    
-    loadSingleEffect(initialEffect).then((video) => {
-      setIsInitialLoading(false);
-      if (video) {
+    const initializeEffect = async () => {
+      const initialEffect = activeEffect >= 1 && activeEffect <= effects.length
+        ? activeEffect
+        : getRandomEffectIndex(effects.length);
+      const order = Array.from({ length: effects.length }, (_, idx) => ((initialEffect - 1 + idx) % effects.length) + 1);
+
+      for (const effectNumber of order) {
+        if (destroyedRef.current) return;
+        const video = await loadSingleEffect(effectNumber);
+        if (!video) continue;
+        currentActiveRef.current = effectNumber;
+        setRenderEffectNumber(effectNumber);
         video.play().catch(() => {});
+        setIsInitialLoading(false);
+        return;
       }
-    });
+      setIsInitialLoading(false);
+    };
+
+    initializeEffect();
 
     return () => {
+      destroyedRef.current = true;
       videoRefs.current.forEach((video) => {
         video.pause();
         video.src = "";
@@ -175,13 +200,12 @@ export default function EffectVideoPlayer({
       isLoadingRef.current = {};
       currentActiveRef.current = null;
     };
-  }, [effects, loadSingleEffect]);
+  }, [effects, loadSingleEffect, enabled, activeEffect]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (activeEffect === currentActiveRef.current) return;
     if (loadingEffect) return;
-
-    console.log(`[EffectVideo] Switching to effect ${activeEffect}`);
 
     const switchToEffect = async () => {
       const video = videoRefs.current.get(activeEffect);
@@ -195,6 +219,7 @@ export default function EffectVideoPlayer({
           }
         });
         currentActiveRef.current = activeEffect;
+        setRenderEffectNumber(activeEffect);
       } else {
         const loadedVideo = await loadSingleEffect(activeEffect);
         if (loadedVideo) {
@@ -206,12 +231,29 @@ export default function EffectVideoPlayer({
             }
           });
           currentActiveRef.current = activeEffect;
+          setRenderEffectNumber(activeEffect);
         }
       }
     };
 
     switchToEffect();
-  }, [activeEffect, loadingEffect, loadSingleEffect]);
+  }, [activeEffect, loadingEffect, loadSingleEffect, enabled]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const activeNum = currentActiveRef.current ?? renderEffectNumber;
+    videoRefs.current.forEach((video, num) => {
+      if (num !== activeNum) {
+        video.pause();
+        return;
+      }
+      if (paused) {
+        video.pause();
+      } else {
+        video.play().catch(() => undefined);
+      }
+    });
+  }, [paused, renderEffectNumber, enabled]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -228,7 +270,12 @@ export default function EffectVideoPlayer({
 
     const drawFrame = (timestamp: number) => {
       if (timestamp - lastFrameTime >= frameInterval) {
-        const activeVideo = videoRefs.current.get(activeEffect);
+        if (!enabled) {
+          lastFrameTime = timestamp;
+          animationFrameRef.current = requestAnimationFrame(drawFrame);
+          return;
+        }
+        const activeVideo = videoRefs.current.get(currentActiveRef.current ?? renderEffectNumber);
         if (activeVideo && activeVideo.readyState >= 2) {
           ctx.drawImage(activeVideo, 0, 0, width, height);
         }
@@ -245,7 +292,7 @@ export default function EffectVideoPlayer({
         animationFrameRef.current = null;
       }
     };
-  }, [activeEffect, width, height, fps]);
+  }, [activeEffect, width, height, fps, renderEffectNumber, enabled]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -255,7 +302,6 @@ export default function EffectVideoPlayer({
     streamRef.current = stream;
     streamReadyCalledRef.current = true;
 
-    console.log(`[EffectVideo] Stream ready: ${stream.getVideoTracks().length} video tracks`);
     onStreamReady(stream);
 
     return () => {

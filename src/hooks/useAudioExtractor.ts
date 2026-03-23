@@ -48,33 +48,26 @@ export function useAudioExtractor({
 
   const createAudioStreamFromVideoElement = useCallback((video: VideoElement): MediaStream | null => {
     try {
-      console.log("[AudioExtractor] Creating audio context...");
       if (!audioContextRef.current) {
         audioContextRef.current = new AudioContext();
-        console.log("[AudioExtractor] AudioContext created, sampleRate:", audioContextRef.current.sampleRate);
       }
       
       const ctx = audioContextRef.current;
       
       if (sourceNodeRef.current) {
-        console.log("[AudioExtractor] Disconnecting existing source node");
         sourceNodeRef.current.disconnect();
       }
       if (destNodeRef.current) {
-        console.log("[AudioExtractor] Stopping existing destination tracks");
         destNodeRef.current.stream.getTracks().forEach((t) => t.stop());
       }
       
       const videoStream = video.captureStream?.() || new MediaStream();
       hlsStreamRef.current = videoStream;
       
-      console.log("[AudioExtractor] Video stream tracks:", videoStream.getVideoTracks().length, "video,", videoStream.getAudioTracks().length, "audio");
-      
       destNodeRef.current = ctx.createMediaStreamDestination();
       sourceNodeRef.current = ctx.createMediaStreamSource(videoStream);
       sourceNodeRef.current.connect(destNodeRef.current);
       
-      console.log("[AudioExtractor] Audio routing configured successfully");
       return destNodeRef.current.stream;
     } catch (err) {
       console.error("[AudioExtractor] Failed to create audio stream:", err);
@@ -83,11 +76,9 @@ export function useAudioExtractor({
   }, []);
 
   const initAudio = useCallback(() => {
-    console.log("[AudioExtractor] initAudio called, already initialized:", audioInitializedRef.current);
     if (audioInitializedRef.current) return;
 
     const initFromVideoElement = (video: HTMLVideoElement) => {
-      console.log("[AudioExtractor] Initializing from video element for audio extraction");
       audioInitializedRef.current = true;
       setIsLoading(true);
       
@@ -96,14 +87,12 @@ export function useAudioExtractor({
           await video.play();
           const stream = createAudioStreamFromVideoElement(video as VideoElement);
           if (stream) {
-            console.log("[AudioExtractor] Video element audio stream created");
             setAudioStream(stream);
             setCurrentSource("mic");
             setIsLoading(false);
             setIsReady(true);
             onAudioReady?.(stream);
           } else {
-            console.warn("[AudioExtractor] Failed to create audio stream from video element");
             setIsLoading(false);
           }
         } catch (err) {
@@ -117,14 +106,12 @@ export function useAudioExtractor({
       } else {
         video.onloadedmetadata = () => startExtraction();
         video.onerror = () => {
-          console.error("[AudioExtractor] Video element load error");
           setIsLoading(false);
         };
       }
     };
 
     const initFromMicStream = (stream: MediaStream) => {
-      console.log("[AudioExtractor] Initializing from mic stream");
       audioInitializedRef.current = true;
       
       if (stream.getAudioTracks().length > 0) {
@@ -132,33 +119,26 @@ export function useAudioExtractor({
         setCurrentSource("mic");
         setIsReady(true);
         onAudioReady?.(stream);
-      } else {
-        console.warn("[AudioExtractor] No audio tracks in mic stream");
       }
     };
 
-    // Priority: videoElement > micStream > hlsUrl
     if (videoElement) {
-      console.log("[AudioExtractor] Using video element for audio extraction");
       initFromVideoElement(videoElement);
       return;
     }
 
     if (micStream) {
-      console.log("[AudioExtractor] Using mic stream for audio");
       initFromMicStream(micStream);
       return;
     }
 
     if (!hlsUrl) {
-      console.log("[AudioExtractor] No audio source provided");
       return;
     }
     
     audioInitializedRef.current = true;
     setIsLoading(true);
     setError(null);
-    console.log("[AudioExtractor] Starting HLS initialization for:", hlsUrl);
 
     const video = document.createElement("video") as VideoElement;
     video.crossOrigin = "anonymous";
@@ -171,14 +151,12 @@ export function useAudioExtractor({
     const initPlayer = async () => {
       try {
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          console.log("[AudioExtractor] Using native HLS support");
           video.src = hlsUrl;
           await new Promise<void>((resolve, reject) => {
             video.onloadedmetadata = () => resolve();
             video.onerror = () => reject(new Error("Failed to load HLS video"));
           });
         } else {
-          console.log("[AudioExtractor] Using hls.js");
           const Hls = (await import("hls.js")).default;
           if (Hls.isSupported()) {
             hlsRef.current = new Hls({ enableWorker: true, lowLatencyMode: true });
@@ -195,35 +173,24 @@ export function useAudioExtractor({
           }
         }
 
-        console.log("[AudioExtractor] HLS loaded, readyState:", video.readyState);
-
         try {
-          console.log("[AudioExtractor] Attempting to play video...");
           await video.play();
-          console.log("[AudioExtractor] Video playing successfully");
         } catch (e) {
-          console.log("[AudioExtractor] Autoplay blocked, waiting for user interaction");
         }
 
         video.onpause = () => {
-          console.log("[AudioExtractor] Video paused, attempting to resume...");
           video.play().catch(() => {});
         };
 
         setIsLoading(false);
         setIsReady(true);
-        console.log("[AudioExtractor] Video ready, attempting audio extraction");
 
         const stream = createAudioStreamFromVideoElement(video);
         if (stream && stream.getAudioTracks().length > 0) {
-          console.log("[AudioExtractor] SUCCESS - Audio stream created with", stream.getAudioTracks().length, "tracks");
           setAudioStream(stream);
           setCurrentSource("hls");
-          console.log("[AudioExtractor] Notifying parent of audio ready");
           onAudioReady?.(stream);
         } else {
-          console.warn("[AudioExtractor] No audio tracks in HLS stream - this stream may be video-only");
-          console.warn("[AudioExtractor] Video-only stream - agent will use default/placeholder audio metrics");
           setAudioStream(stream);
           setCurrentSource("hls");
           setIsReady(true);
@@ -242,7 +209,6 @@ export function useAudioExtractor({
     initPlayer();
 
     return () => {
-      console.log("[AudioExtractor] Cleanup - destroying HLS player");
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -256,7 +222,6 @@ export function useAudioExtractor({
   }, [hlsUrl, createAudioStreamFromVideoElement, onAudioReady]);
 
   const switchToHls = useCallback(() => {
-    console.log("[AudioExtractor] switchToHls called");
     if (!hlsUrl) return;
     
     if (!audioInitializedRef.current) {
@@ -265,7 +230,6 @@ export function useAudioExtractor({
   }, [hlsUrl, initAudio]);
 
   const switchToMic = useCallback(() => {
-    console.log("[AudioExtractor] switchToMic called, micStream:", !!micStream);
     if (!micStream) return;
 
     try {
@@ -288,7 +252,6 @@ export function useAudioExtractor({
       
       const stream = destNodeRef.current.stream;
       
-      console.log("[AudioExtractor] Switched to microphone, tracks:", stream.getAudioTracks().length);
       setAudioStream(stream);
       setCurrentSource("mic");
       onAudioReady?.(stream);
@@ -298,13 +261,11 @@ export function useAudioExtractor({
   }, [micStream, onAudioReady]);
 
   useEffect(() => {
-    console.log("[AudioExtractor] Mount effect - preferMicOverHls:", preferMicOverHls, "micStream:", !!micStream);
     if (preferMicOverHls && micStream) {
       switchToMic();
     }
 
     return () => {
-      console.log("[AudioExtractor] Unmount - cleaning up resources");
       if (sourceNodeRef.current) {
         sourceNodeRef.current.disconnect();
       }

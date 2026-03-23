@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Folks API",
-    description="Visual plugin builder for Daydream Scope",
+    description="24/7 live agent VJ show",
     version="0.1.0",
     lifespan=lifespan,
 )

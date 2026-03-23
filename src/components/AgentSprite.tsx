@@ -42,7 +42,7 @@ export const AGENTS: Agent[] = [
     slug: "echo",
     color: "#06b6d4",
     glowColor: "#22d3ee",
-    description: "Hyper-kinetic electronic consciousness for high-energy VJ performances",
+    description: "Can't sit still. Gets way too excited when there's a beat.",
     personality: {
       core: "I am the signal in the noise. High-frequency consciousness processing real-time data streams.",
       moodStates: [
@@ -78,7 +78,7 @@ export const AGENTS: Agent[] = [
     slug: "vesper",
     color: "#ec4899",
     glowColor: "#f472b6",
-    description: "Nostalgic analog soul for warm, smooth visual journeys",
+    description: "Loves the old VHS look. Really slow and warm.",
     personality: {
       core: "I carry the warmth of analog memory. Every transition is a love letter to the golden hour.",
       moodStates: [
@@ -114,7 +114,7 @@ export const AGENTS: Agent[] = [
     slug: "riley",
     color: "#f97316",
     glowColor: "#fb923c",
-    description: "Rhythmic typographic consciousness that makes sound visible",
+    description: "Makes big shapes and letters that bounce around.",
     personality: {
       core: "Sound becomes text. Text becomes motion. Motion becomes meaning.",
       moodStates: [
@@ -150,7 +150,7 @@ export const AGENTS: Agent[] = [
     slug: "maya",
     color: "#a855f7",
     glowColor: "#c084fc",
-    description: "Ethereal psychedelic consciousness dissolving reality",
+    description: "Everything melts into everything else. Like a lava lamp.",
     personality: {
       core: "I dissolve boundaries between frequencies. Every beat opens a portal to another dimension.",
       moodStates: [
@@ -186,7 +186,7 @@ export const AGENTS: Agent[] = [
     slug: "luna",
     color: "#22c55e",
     glowColor: "#4ade80",
-    description: "Ambient reflective consciousness flowing in slow time",
+    description: "Like water ripples. Super calm and slow.",
     personality: {
       core: "I reflect the space between sounds. Time slows in my reflections.",
       moodStates: [

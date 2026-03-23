@@ -18,10 +18,15 @@ export default function SkillDialog({ agent, isOpen, onClose }: SkillDialogProps
     if (isOpen && agent) {
       setLoading(true);
       setError(null);
-      fetch(`/agents/skills/${agent.toLowerCase()}/SKILL.md`)
-        .then((res) => {
+      fetch(`/internal/skills/${agent.toLowerCase()}`)
+        .then(async (res) => {
           if (!res.ok) throw new Error("Skill file not found");
-          return res.text();
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            return typeof data?.content === "string" ? data.content : "";
+          }
+          return await res.text();
         })
         .then((text) => {
           setContent(text);
@@ -57,12 +62,9 @@ export default function SkillDialog({ agent, isOpen, onClose }: SkillDialogProps
       <div className="relative w-full max-w-4xl max-h-[85vh] mx-4 bg-[#0f0f10] rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center">
-              <BookOpen className="w-5 h-5 text-yellow-500" />
-            </div>
+
             <div>
               <h2 className="text-lg font-semibold text-white">{agent}</h2>
-              <p className="text-xs text-white/50 uppercase tracking-wider">Skill</p>
             </div>
           </div>
           <button

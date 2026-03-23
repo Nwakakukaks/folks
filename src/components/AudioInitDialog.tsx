@@ -6,9 +6,10 @@ import { Volume2 } from "lucide-react";
 interface AudioInitDialogProps {
   isOpen: boolean;
   onConfirm: () => void;
+  setUnmuted?: (value: boolean) => void;
 }
 
-export default function AudioInitDialog({ isOpen, onConfirm }: AudioInitDialogProps) {
+export default function AudioInitDialog({ isOpen, onConfirm, setUnmuted }: AudioInitDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const hasConfirmedRef = useRef(false);
@@ -29,6 +30,9 @@ export default function AudioInitDialog({ isOpen, onConfirm }: AudioInitDialogPr
     if (hasConfirmedRef.current) return;
     hasConfirmedRef.current = true;
     onConfirm();
+    if (setUnmuted) {
+      setUnmuted(true);
+    }
   };
 
   if (!isOpen) return null;
@@ -40,7 +44,7 @@ export default function AudioInitDialog({ isOpen, onConfirm }: AudioInitDialogPr
     >
       <div className="absolute inset-0 bg-black/10 backdrop-blur-sm" />
 
-      <div className="relative w-full max-w-md mx-4 bg-[#242425] rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-md mx-4 bg-[#151516] rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
         <div className="p-8 text-center">
           <div className="w-16 h-16 mx-auto mb-6 rounded-full border-2 border-yellow-500/50 flex items-center justify-center bg-yellow-500/10 animate-pulse">
             <Volume2 className="w-8 h-8 text-yellow-500" />

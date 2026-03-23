@@ -7,6 +7,8 @@ interface HLSPlayerProps {
   src: string;
   onStreamReady?: (stream: MediaStream | null) => void;
   muted?: boolean;
+  unmute?: boolean;
+  paused?: boolean;
   autoPlay?: boolean;
   className?: string;
 }
@@ -15,6 +17,8 @@ export default function HLSPlayer({
   src, 
   onStreamReady, 
   muted = true, 
+  unmute = false,
+  paused = false,
   autoPlay = true,
   className = "" 
 }: HLSPlayerProps) {
@@ -96,11 +100,22 @@ export default function HLSPlayer({
   }, [onStreamReady]);
 
   useEffect(() => {
-    setIsMuted(muted);
-    if (videoRef.current) {
-      videoRef.current.muted = muted;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const nextMuted = paused ? true : (unmute ? false : muted);
+    video.muted = nextMuted;
+    setIsMuted(nextMuted);
+
+    if (paused) {
+      video.pause();
+      return;
     }
-  }, [muted]);
+
+    if (autoPlay) {
+      video.play().catch(() => undefined);
+    }
+  }, [muted, unmute, paused, autoPlay]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -173,6 +188,15 @@ export default function HLSPlayer({
     initHls();
 
     return () => {
+      if (onStreamReadyRef.current) {
+        onStreamReadyRef.current(null);
+      }
+      if (video) {
+        video.pause();
+        video.muted = true;
+        video.removeAttribute("src");
+        video.load();
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;

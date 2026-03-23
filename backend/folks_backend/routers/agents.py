@@ -1,76 +1,126 @@
-"""Agent reasoning router using Groq LLM for autonomous VJ control."""
+"""Agent reasoning router for autonomous VJ control."""
+
+from __future__ import annotations
 
 import json
-from typing import Optional, List, Any
-from pydantic import BaseModel
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..config import get_settings
 
 router = APIRouter()
 
+MODEL_NAME = os.getenv("AGENT_REASON_MODEL", "qwen/qwen3-32b")
+SCOPE_ENV = os.getenv("SCOPE_ENV", os.getenv("NEXT_PUBLIC_SCOPE_ENV", "prod")).lower()
+IS_LOCAL_SCOPE = SCOPE_ENV == "local"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MAX_PROMPT_CHARS = 900
+MIN_PROMPT_WORDS = 12
+MAX_CONTEXT_CHARS = 24_000
+MAX_SKILL_CHARS = 18_000
+
+ALLOWED_MOODS = {
+    "calm",
+    "groovy",
+    "energetic",
+    "chaotic",
+    "dark",
+    "bright",
+    "warm",
+    "harsh",
+}
+
+PREFERRED_PIPELINES = (
+    {"longlive"}
+    if IS_LOCAL_SCOPE
+    else {
+        "glitch-realm",
+        "crystal-box",
+        "morph-host",
+        "urban-spray",
+        "cosmic-drift",
+        "kaleido-scope",
+    }
+)
+
+EFFECT_VIDEO_COUNT = max(
+    1,
+    int(
+        os.getenv(
+            "EFFECT_VIDEO_COUNT",
+            os.getenv("NEXT_PUBLIC_EFFECT_VIDEO_COUNT", "5"),
+        )
+    ),
+)
+
 
 class AudioMetrics(BaseModel):
-    """Audio metrics from analysis - supports both simple and rich formats."""
-    
-    # Legacy fields (optional for backwards compatibility)
-    bass: Optional[float] = 0.0
-    mids: Optional[float] = 0.0
-    highs: Optional[float] = 0.0
-    overall: Optional[float] = 0.0
-    motion: Optional[float] = 0.0
-    beat: Optional[bool] = False
-    
-    # Rich audio features
-    subBass: Optional[float] = 0.0
-    lowMids: Optional[float] = 0.0
-    upperMids: Optional[float] = 0.0
-    
-    # Energy metrics
-    rms: Optional[float] = 0.0
-    peak: Optional[float] = 0.0
-    dynamics: Optional[float] = 0.0
-    
-    # Spectral features
-    spectralCentroid: Optional[float] = 0.0
-    spectralRolloff: Optional[float] = 0.0
-    spectralFlatness: Optional[float] = 0.0
-    spectralFlux: Optional[float] = 0.0
-    spectralContrast: Optional[float] = 0.0
-    
-    # Temporal features
-    zeroCrossingRate: Optional[float] = 0.0
-    transients: Optional[float] = 0.0
-    rhythmStability: Optional[float] = 0.0
-    
-    # Beat detection
-    beatDetected: Optional[bool] = False
-    beatStrength: Optional[float] = 0.0
-    tempo: Optional[float] = 0.0
-    tempoConfidence: Optional[float] = 0.0
-    
-    # Mood/character
-    mood: Optional[str] = "calm"
-    dominantRange: Optional[str] = "mids"
-    energyCharacter: Optional[str] = "balanced"
+    bass: float = 0.0
+    mids: float = 0.0
+    highs: float = 0.0
+    overall: float = 0.0
+    subBass: float = 0.0
+    lowMids: float = 0.0
+    upperMids: float = 0.0
+    rms: float = 0.0
+    peak: float = 0.0
+    dynamics: float = 0.0
+    beatDetected: bool = False
+    beatStrength: float = 0.0
+    tempo: float = 0.0
+    tempoConfidence: float = 0.0
+    mood: str = "calm"
+    dominantRange: str = "mids"
+    energyCharacter: str = "balanced"
 
 
 class CurrentState(BaseModel):
-    """Current agent state."""
+    pipeline: str = "passthrough"
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    plugins: List[str] = Field(default_factory=list)
+    mood: str = "neutral"
+    current_effect: int = 1
 
-    pipeline: str
-    parameters: dict
-    plugins: List[str]
-    mood: Optional[str] = None
-    current_effect: Optional[int] = 1
+
+class AgentScheduleContext(BaseModel):
+    slot: Optional[str] = None
+    nextTransitionAt: Optional[str] = None
+
+
+class AgentAnalyzerContext(BaseModel):
+    provider: Optional[str] = None
+    source: Optional[str] = None
+
+
+class AgentReasonContext(BaseModel):
+    schedule: Optional[AgentScheduleContext] = None
+    analyzer: Optional[AgentAnalyzerContext] = None
+    pipelines: Optional[List[Dict[str, Any]]] = None
+
+
+class AgentProfile(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    personality: Optional[Dict[str, Any]] = None
+    visualStyle: Optional[Dict[str, Any]] = None
+    audioReactivity: Optional[Dict[str, Any]] = None
 
 
 class AgentAction(BaseModel):
-    """An action the agent wants to take."""
-
-    type: str  # send_parameters, send_prompt, load_pipeline, install_plugin, configure_ndi, select_effect
-    params: Optional[dict] = None
+    type: Literal[
+        "send_prompt",
+        "send_parameters",
+        "load_pipeline",
+        "install_plugin",
+        "configure_ndi",
+        "select_effect",
+    ]
+    params: Optional[Dict[str, Any]] = None
     prompt: Optional[str] = None
     weight: Optional[float] = None
     pipeline_id: Optional[str] = None
@@ -81,359 +131,534 @@ class AgentAction(BaseModel):
 
 
 class AgentReasonRequest(BaseModel):
-    """Request for agent reasoning."""
-
     agent: str
-    skill: str
+    skill: str = ""
     audio_metrics: AudioMetrics
     current_state: CurrentState
+    context: Optional[AgentReasonContext] = None
+    agent_profile: Optional[AgentProfile] = None
 
 
 class AgentReasonResponse(BaseModel):
-    """Response from agent reasoning."""
-
     thinking: str
     actions: List[AgentAction]
     mood: str
     confidence: float
+    caption_text: Optional[str] = None
+    caption_styling: Optional[Dict[str, Any]] = None
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are {agent_name}, an autonomous VJ agent running on Daydream Scope.
-
-## Your Identity
-{agent_description}
-
-## Your Current State
-- Mood: {current_mood}
-- Pipeline: {current_pipeline}
-- Current Effect: {current_effect}
-
-## Audio Analysis (RICH CONTEXT)
-{audio_context}
-
-## Available Actions
-
-1. **send_prompt** - Generate a creative text prompt for the AI video generator
-   - This is your PRIMARY action for visual control
-   - Create evocative, cinematic prompts that match the audio mood
-   - Examples: "neon lights reflecting on wet streets at midnight", "bioluminescent creatures in a dark ocean"
-   - weight: 1.0 (fixed for longlive pipeline)
-
-2. **select_effect** - Switch to a different effect video (1-5) and
-   - 1: Grid Pulse (geometric grids, rhythmic pulses)
-   - 2: Wave Flow (fluid wave motion, organic movement)
-   - 3: Particle Storm (particles, explosions, energy bursts)
-   - 4: Geometric Drift (floating shapes, dreamy atmosphere)
-   - 5: Liquid Motion (liquid dynamics, viscous fluids)
-
-## Effect Video Guide
-Match the effect to the audio character:
-- High energy, beats → Particle Storm or Wave Flow
-- Calm, ambient → Geometric Drift or Liquid Motion
-- Rhythmic, structured → Grid Pulse
-- Dark, bass-heavy → Particle Storm or Wave Flow
-- Bright, highs present → Geometric Drift
-
-## Your SKILL.md (Agent Instructions)
-
-The agent's SKILL.md file contains detailed instructions. READ IT CAREFULLY and follow its guidelines for:
-- Prompt generation philosophy
-- Style preferences
-- Effect selection logic
-
-## Response Format
-
-Return a JSON object with your reasoning and actions:
-
-{{
-  "thinking": "Your analysis of the audio and decision process",
-  "mood": "The current mood (calm, groovy, energetic, chaotic, dark, bright, warm, harsh)",
-  "confidence": 0.0-1.0,
-  "actions": [
-    {{
-      "type": "send_prompt",
-      "prompt": "Your creative prompt for the AI video generator"
-    }},
-    {{
-      "type": "select_effect",
-      "effect_number": 1-5
-    }}
-  ]
-}}
-
-IMPORTANT: Always include a "send_prompt" action with a creative, evocative prompt that captures the essence of the music.
-"""
+class CaptionStyling(BaseModel):
+    position_preset: str = "center"
+    text_align: str = "center"
+    font_weight: str = "bold"
+    font_size: int = 80
+    text_color_r: int = 255
+    text_color_g: int = 255
+    text_color_b: int = 255
+    outline_enabled: bool = True
+    outline_width: int = 4
+    bg_enabled: bool = False
 
 
-AGENT_DESCRIPTIONS = {
-    "echo": "A precise, rhythmic agent who thrives on beats and basslines. Echo sees the world in patterns and grids, finding order in chaos through repetition and pulse. Perfect for techno, house, and structured electronic music.",
-    "vesper": "A dreamy, atmospheric agent who responds to ambience and space. Vesper paints with light and shadow, creating ethereal visuals that breathe with the music. Perfect for ambient, downtempo, and atmospheric soundscapes.",
-    "riley": "A chaotic, energetic agent who embraces chaos and intensity. Riley explodes with color and motion, translating high energy into explosive visual storms. Perfect for drum and bass, hardcore, and intense electronic music.",
-    "maya": "A fluid, organic agent who flows with the music's natural movement. Maya creates liquid, morphing visuals that feel alive and breathing. Perfect for organic electronic, world music, and flowing compositions.",
-    "luna": "A dark, mysterious agent who finds beauty in the shadows. Luna creates deep, atmospheric visuals with subtle details that reveal themselves over time. Perfect for dark techno, industrial, and moody electronic music.",
-}
+class CaptionResponse(BaseModel):
+    thinking: str
+    caption_text: str
+    confidence: float
+    styling: CaptionStyling = Field(default_factory=CaptionStyling)
 
 
-async def call_groq(messages: List[dict], settings) -> tuple[str, str | None]:
-    """Call Groq API for reasoning."""
-    import httpx
+def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
+def has_min_words(text: str, minimum: int = MIN_PROMPT_WORDS) -> bool:
+    return len([w for w in text.split(" ") if w.strip()]) >= minimum
+
+
+def load_scope_context() -> str:
+    context_path = (
+        Path(__file__).parent.parent.parent.parent
+        / "src"
+        / "agents"
+        / "SCOPE_CONTEXT.md"
+    )
+    if context_path.exists():
+        return context_path.read_text(encoding="utf-8")
+    return ""
+
+
+def load_skill_for_agent(agent_slug: str) -> str:
+    skill_path = (
+        Path(__file__).parent.parent.parent.parent
+        / "src"
+        / "agents"
+        / "skills"
+        / agent_slug
+        / "SKILL.md"
+    )
+    if skill_path.exists():
+        return skill_path.read_text(encoding="utf-8")
+    return ""
+
+
+def build_audio_summary(metrics: AudioMetrics) -> str:
+    energy_band = (
+        "high"
+        if metrics.overall > 0.72
+        else "medium"
+        if metrics.overall > 0.38
+        else "low"
+    )
+    beat = "yes" if metrics.beatDetected else "no"
+    return (
+        f"energy={metrics.overall:.3f} ({energy_band}), "
+        f"bass={metrics.bass:.3f}, mids={metrics.mids:.3f}, highs={metrics.highs:.3f}, "
+        f"beat={beat}, beatStrength={metrics.beatStrength:.3f}, "
+        f"tempo={metrics.tempo:.1f}, mood={metrics.mood}, dominantRange={metrics.dominantRange}"
+    )
+
+
+def build_fallback_prompt(metrics: AudioMetrics, mood: str) -> str:
+    energy_phrase = (
+        "high-intensity kinetic movement"
+        if metrics.overall > 0.7
+        else "steady rhythmic flow"
+        if metrics.overall > 0.4
+        else "slow atmospheric drift"
+    )
+    beat_phrase = (
+        "with punchy beat-synced accents"
+        if metrics.beatDetected
+        else "with smooth continuous transitions"
+    )
+    color_phrase = (
+        "deep neon magenta, cyan highlights, and metallic blue shadows"
+        if mood in {"energetic", "chaotic", "bright"}
+        else "moody violet gradients, charcoal blacks, and warm amber edge light"
+    )
+    return (
+        f"Cinematic club visual composition with {energy_phrase}, layered volumetric haze, "
+        f"polished texture detail, and controlled camera-like motion arcs. Emphasize {color_phrase}, "
+        f"preserve strong center focus for stage readability, and evolve forms in cohesive waves {beat_phrase}. "
+        f"Blend geometric structures with fluid light trails, maintain premium contrast, and avoid visual clutter."
+    )
+
+
+def build_fallback_caption(metrics: AudioMetrics) -> str:
+    if metrics.overall > 0.72:
+        return "OH YEAH!!"
+    if metrics.beatDetected:
+        return "FEEL THE RHYTHM"
+    return "STAY IN THE GROOVE"
+
+
+def build_caption_system_prompt() -> str:
+    caption_examples = [
+        "\"If you're still standing, you're not dancing enough!!\"",
+        '"This is your sign to move!!"',
+        '"Who came here to forget tomorrow?"',
+        '"Drink water. Then dance harder."',
+        '"That drop was illegal!!"',
+        '"You felt that one, didn\'t you?"',
+        '"No phones. Just this moment."',
+        '"The DJ saw you dancing!!"',
+        '"Stay a little longer."',
+        '"Same song, different memories."',
+        '"Don\'t stop now!!"',
+        '"Your vibe is showing."',
+        '"This is the good part."',
+    ]
+
+    return f"""You are a caption generator for a club DJ show.
+
+Your ONLY job is to generate short, punchy captions for a video display. Think of it like signage at a club.
+
+Rules:
+1. Generate exactly 3-8 words
+2. ALWAYS end with !! or ??
+3. Be cheeky, provocative, or funny
+4. Match the energy level provided
+5. Do NOT generate prompts, actions, or anything else
+
+Examples of good captions:
+{chr(10).join(f"  {ex}" for ex in caption_examples)}
+
+Output ONLY this JSON format:
+{{"thinking":"brief reason","caption_text":"your 3-8 word caption ending with !! or ??","confidence":0.85}}
+
+Return ONLY the JSON. Nothing else."""
+
+
+async def caption_reason(request: AgentReasonRequest) -> CaptionResponse:
+    """Generate captions using a dedicated caption-focused system."""
+    settings = get_settings()
 
     if not settings.groq_api_key:
-        raise HTTPException(status_code=500, detail="Groq API key not configured")
+        fallback_caption = build_fallback_caption(request.audio_metrics)
+        return CaptionResponse(
+            thinking="No API key, using fallback",
+            caption_text=fallback_caption,
+            confidence=0.25,
+        )
+
+    agent_slug = request.agent.strip().lower()
+    audio_summary = build_audio_summary(request.audio_metrics)
+
+    system_prompt = build_caption_system_prompt()
+
+    user_payload = {
+        "energy": request.audio_metrics.overall,
+        "beat_detected": request.audio_metrics.beatDetected,
+        "mood": request.audio_metrics.mood,
+    }
+
+    llm_result = await call_groq(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload)},
+        ],
+        settings.groq_api_key,
+    )
+
+    if not llm_result:
+        fallback_caption = build_fallback_caption(request.audio_metrics)
+        return CaptionResponse(
+            thinking="LLM call failed, using fallback",
+            caption_text=fallback_caption,
+            confidence=0.25,
+        )
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.groq_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "qwen/qwen3-32b",
-                    "messages": messages,
-                    "temperature": 0.8,
-                    "max_completion_tokens": 2048,
-                },
-            )
+        caption_text = str(llm_result.get("caption_text", "")).strip()
+        if not caption_text or len(caption_text) < 3:
+            caption_text = build_fallback_caption(request.audio_metrics)
 
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Groq API error: {response.text}",
-                )
+        if not (caption_text.endswith("!!") or caption_text.endswith("??")):
+            caption_text += "!!"
 
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
+        thinking = str(llm_result.get("thinking", "")).strip()[:200]
+        confidence = float(llm_result.get("confidence", 0.7))
+        confidence = clamp(confidence, 0.0, 1.0)
 
-            # Extract thinking from <think> tags
-            reasoning = None
-            if "<｜analysis｜>" in content:
-                start = content.find("<｜analysis｜>") + len("<｜analysis｜>")
-                end = content.find("<｜") if "<｜" in content[start:] else len(content)
-                reasoning = content[start:end].strip()
-            
-            if not reasoning and content:
-                reasoning = extract_thinking_from_content(content)
+        styling = CaptionStyling(
+            position_preset="center",
+            text_align="center",
+            font_weight="bold",
+            font_size=80,
+            text_color_r=255,
+            text_color_g=255,
+            text_color_b=255,
+            outline_enabled=True,
+            outline_width=4,
+            bg_enabled=False,
+        )
 
-            return content, reasoning
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-def extract_thinking_from_content(content: str) -> str | None:
-    """Extract thinking from <think>...</think> tags in content."""
-    import re
-
-    # Match <think> tags (may span multiple lines)
-    pattern = r"<think>(.*?)</think>"
-    match = re.search(pattern, content, re.DOTALL)
-    if match:
-        thinking = match.group(1).strip()
-        return thinking
-    return None
+        return CaptionResponse(
+            thinking=thinking or "Caption generated successfully",
+            caption_text=caption_text,
+            confidence=confidence,
+            styling=styling,
+        )
+    except Exception:
+        fallback_caption = build_fallback_caption(request.audio_metrics)
+        return CaptionResponse(
+            thinking="Parse error, using fallback",
+            caption_text=fallback_caption,
+            confidence=0.25,
+        )
 
 
-def remove_thinking_tags(content: str) -> str:
-    """Remove <think>...</think> tags from content."""
-    import re
-
-    pattern = r"<think>.*?</think>"
-    return re.sub(pattern, "", content, flags=re.DOTALL).strip()
-
-
-def build_audio_context(metrics: AudioMetrics) -> str:
-    """Build rich audio context string from metrics."""
-    
-    # Determine energy level
-    overall = metrics.overall or 0.5
-    
-    # Build frequency band description
-    bands = []
-    if (metrics.subBass or 0) > 0.6:
-        bands.append("deep sub-bass rumble")
-    if (metrics.bass or 0) > 0.5:
-        bands.append("powerful bass")
-    if (metrics.lowMids or 0) > 0.5:
-        bands.append("warm low-mids")
-    if (metrics.mids or 0) > 0.5:
-        bands.append("present midrange")
-    if (metrics.upperMids or 0) > 0.5:
-        bands.append("crisp upper-mids")
-    if (metrics.highs or 0) > 0.5:
-        bands.append("sparkling highs")
-    elif (metrics.highs or 0) < 0.3:
-        bands.append("dark, rolled-off highs")
-    
-    band_desc = ", ".join(bands) if bands else "balanced frequency distribution"
-    
-    # Build tempo description
-    tempo_desc = "no clear tempo"
-    if metrics.tempo and metrics.tempo > 0:
-        bpm = int(metrics.tempo)
-        confidence = metrics.tempoConfidence or 0
-        if confidence > 0.5:
-            if bpm < 80:
-                tempo_desc = f"slow (~{bpm} BPM)"
-            elif bpm < 120:
-                tempo_desc = f"moderate (~{bpm} BPM)"
-            elif bpm < 150:
-                tempo_desc = f"fast (~{bpm} BPM)"
-            else:
-                tempo_desc = f"very fast (~{bpm} BPM)"
-        else:
-            tempo_desc = f"approximately {bpm} BPM (uncertain)"
-    
-    # Build rhythm description
-    rhythm_desc = "steady"
-    if metrics.beatDetected:
-        strength = metrics.beatStrength or 0.5
-        if strength > 0.7:
-            rhythm_desc = "strong, driving beat"
-        elif strength > 0.4:
-            rhythm_desc = "moderate beat presence"
-        else:
-            rhythm_desc = "subtle beat"
-    
-    # Build spectral character
-    flatness = metrics.spectralFlatness or 0.5
-    if flatness > 0.6:
-        spectral_char = "noisy/textured"
-    elif flatness > 0.3:
-        spectral_char = "mixed tonal/textured"
+def fallback_response(request: AgentReasonRequest) -> AgentReasonResponse:
+    audio = request.audio_metrics
+    if audio.overall > 0.72:
+        mood = "energetic"
+    elif audio.bass > 0.58 and audio.highs < 0.35:
+        mood = "dark"
+    elif audio.highs > 0.62:
+        mood = "bright"
+    elif audio.overall < 0.2:
+        mood = "calm"
     else:
-        spectral_char = "pure/tonal"
-    
-    # Build mood from metrics
-    mood = metrics.mood or "balanced"
-    
-    # Build dynamics description
-    dynamics = metrics.dynamics or 1.0
-    if dynamics > 3:
-        dynamics_desc = "very dynamic (wide variation)"
-    elif dynamics > 2:
-        dynamics_desc = "dynamic (good variation)"
-    elif dynamics > 1.5:
-        dynamics_desc = "moderate dynamics"
-    else:
-        dynamics_desc = "compressed (steady level)"
-    
-    # Dominant frequency range
-    dominant = metrics.dominantRange or "mids"
-    dominant_desc = {
-        "subBass": "sub-bass frequencies dominate",
-        "bass": "bass frequencies dominate",
-        "lowMids": "low-mid frequencies dominate",
-        "mids": "mid frequencies dominate",
-        "upperMids": "upper-mid frequencies dominate",
-        "highs": "high frequencies dominate",
-    }.get(dominant, "balanced frequency content")
-    
-    # Transients
-    transients = metrics.transients or 0
-    if transients > 0.5:
-        transient_desc = "sharp transients, punchy attacks"
-    elif transients > 0.2:
-        transient_desc = "moderate transient content"
-    else:
-        transient_desc = "smooth, sustained sound"
-    
-    return f"""### Audio Character
-- Energy Level: {"high" if overall > 0.7 else "medium" if overall > 0.4 else "low"} ({overall:.0%})
-- Frequency Character: {band_desc}
-- Tempo: {tempo_desc}
-- Rhythm: {rhythm_desc}
-- Dynamics: {dynamics_desc}
-- Spectral Character: {spectral_char}
-- Transient Response: {transient_desc}
-- Dominant Range: {dominant_desc}
-- Mood Classification: {mood}
-- Beat Strength: {metrics.beatStrength:.0%} if metrics.beatStrength else "N/A"""
+        mood = "groovy"
+
+    fallback_prompt = build_fallback_prompt(audio, mood)
+    fallback_caption = build_fallback_caption(audio)
+    fallback_styling = CaptionStyling()
+
+    return AgentReasonResponse(
+        thinking="Analyzing the current signal and preparing the next visual move.",
+        mood=mood,
+        confidence=0.25,
+        actions=[
+            AgentAction(
+                type="send_prompt",
+                prompt=fallback_prompt,
+                weight=1.0,
+            ),
+        ],
+        caption_text=fallback_caption,
+        caption_styling=fallback_styling.model_dump(),
+    )
+
+
+def sanitize_action_payload(action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    action_type = str(action.get("type", "")).strip()
+    if action_type not in {
+        "send_prompt",
+        "send_parameters",
+        "load_pipeline",
+        "install_plugin",
+        "configure_ndi",
+        "select_effect",
+    }:
+        return None
+
+    if action_type == "send_prompt":
+        prompt = " ".join(str(action.get("prompt", "")).split()).strip()[
+            :MAX_PROMPT_CHARS
+        ]
+        if not prompt or len(prompt) < 10:
+            return None
+        weight = float(action.get("weight", 1.0))
+        return {
+            "type": action_type,
+            "prompt": prompt,
+            "weight": clamp(weight, 0.1, 2.0),
+        }
+
+    if action_type == "send_parameters":
+        params = action.get("params")
+        if not isinstance(params, dict) or not params:
+            return None
+        return {"type": action_type, "params": params}
+
+    if action_type == "load_pipeline":
+        pipeline_id = str(action.get("pipeline_id", "")).strip()[:120]
+        if not pipeline_id or pipeline_id not in PREFERRED_PIPELINES:
+            return None
+        return {"type": action_type, "pipeline_id": pipeline_id}
+
+    if action_type == "install_plugin":
+        plugin_spec = str(action.get("plugin_spec", "")).strip()[:200]
+        if not plugin_spec:
+            return None
+        return {"type": action_type, "plugin_spec": plugin_spec}
+
+    if action_type == "configure_ndi":
+        ndi_name = str(action.get("ndi_name", "")).strip()[:120]
+        if not ndi_name:
+            return None
+        return {
+            "type": action_type,
+            "ndi_enabled": bool(action.get("ndi_enabled", False)),
+            "ndi_name": ndi_name,
+        }
+
+    effect_number = int(action.get("effect_number", 1))
+    return {
+        "type": "select_effect",
+        "effect_number": min(EFFECT_VIDEO_COUNT, max(1, effect_number)),
+    }
+
+
+def sanitize_response(
+    payload: Dict[str, Any], fallback: AgentReasonResponse
+) -> AgentReasonResponse:
+    thinking = str(payload.get("thinking", "")).strip()[:600] or fallback.thinking
+    mood = str(payload.get("mood", fallback.mood)).lower().strip()
+    mood = mood if mood in ALLOWED_MOODS else fallback.mood
+    confidence = float(payload.get("confidence", fallback.confidence))
+    confidence = clamp(confidence, 0.0, 1.0)
+
+    raw_actions = payload.get("actions", [])
+    actions: List[AgentAction] = []
+    has_prompt = False
+    if isinstance(raw_actions, list):
+        for item in raw_actions:
+            if not isinstance(item, dict):
+                continue
+            sanitized = sanitize_action_payload(item)
+            if not sanitized:
+                continue
+            if sanitized["type"] == "send_prompt":
+                if has_prompt:
+                    continue
+                has_prompt = True
+            actions.append(AgentAction(**sanitized))
+
+    return AgentReasonResponse(
+        thinking=thinking,
+        mood=mood,
+        confidence=confidence,
+        actions=actions,
+    )
+
+
+async def call_groq(
+    messages: List[Dict[str, str]], api_key: str
+) -> Optional[Dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=50.0) as client:
+        response = await client.post(
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": MODEL_NAME,
+                "temperature": 0.45,
+                "max_tokens": 1400,
+                "response_format": {"type": "json_object"},
+                "messages": messages,
+            },
+        )
+
+    if response.status_code != 200:
+        print(f"[agents] Groq error {response.status_code}: {response.text[:500]}")
+        return None
+
+    try:
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            return None
+        return json.loads(content)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[agents] failed to parse Groq content: {exc}")
+        return None
 
 
 @router.post("/reason", response_model=AgentReasonResponse)
 async def agent_reason(request: AgentReasonRequest, settings=get_settings()):
-    """Have an agent reason about what actions to take based on audio metrics."""
+    """Agent reasoning endpoint with safe action sanitization."""
+    fallback = fallback_response(request)
 
-    agent_name = request.agent.capitalize()
-    agent_desc = AGENT_DESCRIPTIONS.get(
-        request.agent.lower(), "An autonomous VJ agent."
+    if not settings.groq_api_key:
+        return fallback
+
+    agent_slug = request.agent.strip().lower()
+    skill = request.skill.strip() or load_skill_for_agent(agent_slug)
+    scope_context = load_scope_context()
+    audio_summary = build_audio_summary(request.audio_metrics)
+
+    print(
+        f"[AGENT] {agent_slug.upper()} received audio: overall={request.audio_metrics.overall:.2f}, beat={request.audio_metrics.beatDetected}, tempo={request.audio_metrics.tempo:.0f}, mood={request.audio_metrics.mood}"
     )
 
-    # Build rich audio context
-    audio_context = build_audio_context(request.audio_metrics)
+    system_prompt = "\n".join(
+        [
+            "You are a real-time autonomous VJ controller for a premium 24/7 agentic livestream.",
+            "Return JSON only. No markdown.",
+            "Always include exactly one send_prompt action.",
+            "Allowed actions: send_prompt, send_parameters, load_pipeline, install_plugin, configure_ndi, select_effect.",
+            "Generate LONG, DETAILED prompts. Target 45-120 words with concrete motion, composition, texture, and color direction.",
+            "Use coherent changes and avoid excessive switching.",
+            "Prefer these main pipelines when switching: glitch-realm, crystal-box, morph-host, urban-spray, cosmic-drift, kaleido-scope.",
+            "Use send_parameters for fine-grained control updates. Caption style should remain bold and centered when captions are updated.",
+            "Respect operator cadence: prompts should be less frequent than control tweaks.",
+            "Output schema:",
+            json.dumps(
+                {
+                    "thinking": "brief summary of reasoning and chosen actions",
+                    "mood": "calm|groovy|energetic|chaotic|dark|bright|warm|harsh",
+                    "confidence": 0.75,
+                    "actions": [
+                        {
+                            "type": "send_prompt",
+                            "prompt": "long detailed cinematic visual prompt",
+                            "weight": 1.0,
+                        }
+                    ],
+                }
+            ),
+            "",
+            "Shared Scope context:",
+            scope_context[:MAX_CONTEXT_CHARS],
+            "",
+            f"Agent skill ({agent_slug}):",
+            skill[:MAX_SKILL_CHARS],
+        ]
+    )
 
-    # Build context
-    context = {
-        "agent_name": agent_name,
-        "agent_description": agent_desc,
-        "current_mood": request.current_state.mood or "neutral",
-        "current_pipeline": request.current_state.pipeline,
-        "current_effect": request.current_state.current_effect or 1,
-        "audio_context": audio_context,
+    user_payload = {
+        "audio_summary": audio_summary,
+        "audio_metrics": request.audio_metrics.model_dump(),
+        "current_state": request.current_state.model_dump(),
+        "agent_profile": request.agent_profile.model_dump()
+        if request.agent_profile
+        else {},
+        "context": request.context.model_dump() if request.context else {},
     }
 
-    prompt = SYSTEM_PROMPT_TEMPLATE.format(**context)
-
-    # Include agent's skill file for guidance
-    if request.skill:
-        prompt += f"\n\n## YOUR SKILL.md\n\n{request.skill}"
-
-    messages = [
-        {"role": "system", "content": prompt},
-        {
-            "role": "user",
-            "content": "Analyze the audio and decide what action to take.",
-        },
-    ]
-
-    response_content, reasoning = await call_groq(messages, settings)
-
-    # Log the reasoning for debugging
-    if reasoning:
-        print(
-            f"[AGENT {agent_name}] Thinking: {reasoning[:500]}..."
-        )  # Log first 500 chars
-
-    # Parse JSON response
-    try:
-        # Remove <think> tags from content if present
-        clean_content = remove_thinking_tags(response_content)
-
-        # Find JSON in response
-        start = clean_content.find("{")
-        end = clean_content.rfind("}") + 1
-        if start >= 0 and end > start:
-            result = json.loads(clean_content[start:end])
-
-            # Use the LLM's thinking, or the extracted reasoning, or fallback
-            thinking = result.get("thinking") or reasoning or "No thinking provided"
-
-            return AgentReasonResponse(
-                thinking=thinking,
-                actions=[AgentAction(**a) for a in result.get("actions", [])],
-                mood=result.get("mood", "neutral"),
-                confidence=result.get("confidence", 0.5),
-            )
-    except json.JSONDecodeError as e:
-        print(f"[AGENT {agent_name}] JSON parse error: {e}")
-        print(f"[AGENT {agent_name}] Raw response: {response_content[:500]}")
-
-    # Fallback response
-    return AgentReasonResponse(
-        thinking=reasoning or "Could not parse LLM response",
-        actions=[],
-        mood="neutral",
-        confidence=0.0,
+    llm_payload = await call_groq(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload)},
+        ],
+        settings.groq_api_key,
     )
+
+    print(
+        f"[AGENT] {agent_slug.upper()} raw LLM response: {str(llm_payload)[:500] if llm_payload else 'None'}"
+    )
+
+    if not llm_payload:
+        print(f"[AGENT] {agent_slug.upper()} LLM call failed, using safety response")
+        return fallback
+
+    result = sanitize_response(llm_payload, fallback)
+    print(
+        f"[AGENT] {agent_slug.upper()} thinking: {result.thinking[:80] if result.thinking else 'N/A'}..."
+    )
+    print(
+        f"[AGENT] {agent_slug.upper()} decided mood={result.mood}, confidence={result.confidence:.2f}, actions={len(result.actions)}"
+    )
+    for action in result.actions:
+        if action.type == "send_prompt" and action.prompt:
+            print(
+                f"[AGENT] {agent_slug.upper()} >> send_prompt: {action.prompt[:80]}..."
+            )
+        elif action.type == "select_effect" and action.effect_number:
+            print(
+                f"[AGENT] {agent_slug.upper()} >> select_effect: {action.effect_number}"
+            )
+        elif action.type == "send_parameters" and action.params:
+            print(
+                f"[AGENT] {agent_slug.upper()} >> send_parameters: {list(action.params.keys())}"
+            )
+        elif action.type == "load_pipeline" and action.pipeline_id:
+            print(
+                f"[AGENT] {agent_slug.upper()} >> load_pipeline: {action.pipeline_id}"
+            )
+
+    caption_result = await caption_reason(request)
+    result.caption_text = caption_result.caption_text
+    result.caption_styling = caption_result.styling.model_dump()
+    print(f"[AGENT] {agent_slug.upper()} >> caption: {caption_result.caption_text}")
+
+    return result
 
 
 @router.get("/status")
 async def agent_status(settings=get_settings()):
-    """Check agent system status."""
     return {
         "available": bool(settings.groq_api_key),
         "provider": "groq",
-        "model": "qwen/qwen3-32b",
+        "model": MODEL_NAME,
     }
+
+
+@router.get("/skills/{agent_slug}")
+async def get_agent_skill(agent_slug: str):
+    """Serve the SKILL.md file for a given agent."""
+    skill = load_skill_for_agent(agent_slug.lower())
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill file not found")
+    return {"content": skill}
+
+
+@router.post("/caption/reason", response_model=CaptionResponse)
+async def agent_caption_reason(request: AgentReasonRequest):
+    """Dedicated caption generation endpoint."""
+    return await caption_reason(request)

@@ -23,17 +23,24 @@ export interface AudioReactiveMetrics {
   spectralFlatness: number;       // 0=tonal, 1=noisy
   spectralFlux: number;           // Change in spectrum
   spectralContrast: number;       // Peak vs valley difference
+  spectralSpread: number;         // Spectral standard deviation (Hz)
+  spectralEntropy: number;        // Spectral entropy 0-1
   
   // Temporal features
   zeroCrossingRate: number;      // 0=tonal, 1=noisy
   transients: number;            // Attack detection
   rhythmStability: number;       // How steady the rhythm is
+  onsetStrength: number;         // Combined onset/transient strength 0-1
   
   // Beat detection
   beatDetected: boolean;
   beatStrength: number;          // 0-1
   tempo: number;                 // BPM
   tempoConfidence: number;        // 0-1
+  beatIntervalMs: number;        // Estimated beat interval in milliseconds
+  lowHighRatio: number;          // Low-energy / high-energy ratio
+  loudnessDb: number;            // Approximate dBFS loudness
+  crestFactor: number;           // Peak / RMS ratio
   
   // Mood/character
   mood: MoodCategory;
@@ -61,9 +68,122 @@ interface UseAudioReactiveOptions {
   onMetrics?: (metrics: AudioReactiveMetrics) => void;
   fftSize?: number;
   updateIntervalMs?: number;
+  provider?: AudioMetricsProvider;
+  oscBridgeUrl?: string;
+}
+
+export type AudioMetricsProvider = "webaudio" | "osc" | "maxmsp" | "hybrid";
+
+export interface AudioReactiveHealth {
+  provider: AudioMetricsProvider;
+  oscConnected: boolean;
+  oscFailures: number;
+  fallbackActive: boolean;
+  effectiveUpdateIntervalMs: number;
 }
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+
+const DEFAULT_OSC_BRIDGE_URL = "ws://127.0.0.1:8765";
+
+function buildEmptyMetrics(): AudioReactiveMetrics {
+  return {
+    subBass: 0, bass: 0, lowMids: 0, mids: 0, upperMids: 0, highs: 0,
+    overall: 0, rms: 0, peak: 0, dynamics: 0,
+    spectralCentroid: 0, spectralRolloff: 0, spectralFlatness: 0, spectralFlux: 0, spectralContrast: 0, spectralSpread: 0, spectralEntropy: 0,
+    zeroCrossingRate: 0, transients: 0, rhythmStability: 0, onsetStrength: 0,
+    beatDetected: false, beatStrength: 0, tempo: 0, tempoConfidence: 0, beatIntervalMs: 0, lowHighRatio: 0, loudnessDb: -96, crestFactor: 0,
+    mood: "calm", dominantRange: "mids", energyCharacter: "calm",
+    timestamp: Date.now(), isAnalyzing: false,
+  };
+}
+
+function toNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function toBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return fallback;
+}
+
+function normalizeExternalMetrics(
+  payload: unknown,
+  previous: AudioReactiveMetrics,
+): AudioReactiveMetrics | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const source = payload as Record<string, unknown>;
+  const nested = (source.metrics && typeof source.metrics === "object")
+    ? (source.metrics as Record<string, unknown>)
+    : source;
+
+  const moodCandidate = nested.mood;
+  const dominantRangeCandidate = nested.dominantRange;
+  const energyCharacterCandidate = nested.energyCharacter;
+
+  const mood =
+    typeof moodCandidate === "string"
+      ? (moodCandidate as MoodCategory)
+      : previous.mood;
+
+  const dominantRange =
+    typeof dominantRangeCandidate === "string" &&
+    ["subBass", "bass", "lowMids", "mids", "upperMids", "highs"].includes(dominantRangeCandidate)
+      ? (dominantRangeCandidate as AudioReactiveMetrics["dominantRange"])
+      : previous.dominantRange;
+
+  const energyCharacter =
+    typeof energyCharacterCandidate === "string" &&
+    ["calm", "balanced", "driven"].includes(energyCharacterCandidate)
+      ? (energyCharacterCandidate as AudioReactiveMetrics["energyCharacter"])
+      : previous.energyCharacter;
+
+  return {
+    ...previous,
+    subBass: clamp(toNumber(nested.subBass, previous.subBass)),
+    bass: clamp(toNumber(nested.bass, previous.bass)),
+    lowMids: clamp(toNumber(nested.lowMids, previous.lowMids)),
+    mids: clamp(toNumber(nested.mids, previous.mids)),
+    upperMids: clamp(toNumber(nested.upperMids, previous.upperMids)),
+    highs: clamp(toNumber(nested.highs, previous.highs)),
+    overall: clamp(toNumber(nested.overall, previous.overall)),
+    rms: clamp(toNumber(nested.rms, previous.rms)),
+    peak: clamp(toNumber(nested.peak, previous.peak)),
+    dynamics: clamp(toNumber(nested.dynamics, previous.dynamics), 0, 4),
+    spectralCentroid: toNumber(nested.spectralCentroid, previous.spectralCentroid),
+    spectralRolloff: toNumber(nested.spectralRolloff, previous.spectralRolloff),
+    spectralFlatness: clamp(toNumber(nested.spectralFlatness, previous.spectralFlatness)),
+    spectralFlux: clamp(toNumber(nested.spectralFlux, previous.spectralFlux), 0, 4),
+    spectralContrast: clamp(toNumber(nested.spectralContrast, previous.spectralContrast), 0, 2),
+    spectralSpread: Math.max(0, toNumber(nested.spectralSpread, previous.spectralSpread)),
+    spectralEntropy: clamp(toNumber(nested.spectralEntropy, previous.spectralEntropy)),
+    zeroCrossingRate: clamp(toNumber(nested.zeroCrossingRate, previous.zeroCrossingRate), 0, 2),
+    transients: clamp(toNumber(nested.transients, previous.transients), 0, 2),
+    rhythmStability: clamp(toNumber(nested.rhythmStability, previous.rhythmStability)),
+    onsetStrength: clamp(toNumber(nested.onsetStrength, previous.onsetStrength)),
+    beatDetected: toBoolean(nested.beatDetected, previous.beatDetected),
+    beatStrength: clamp(toNumber(nested.beatStrength, previous.beatStrength)),
+    tempo: Math.max(0, toNumber(nested.tempo, previous.tempo)),
+    tempoConfidence: clamp(toNumber(nested.tempoConfidence, previous.tempoConfidence)),
+    beatIntervalMs: Math.max(0, toNumber(nested.beatIntervalMs, previous.beatIntervalMs)),
+    lowHighRatio: clamp(toNumber(nested.lowHighRatio, previous.lowHighRatio), 0, 10),
+    loudnessDb: toNumber(nested.loudnessDb, previous.loudnessDb),
+    crestFactor: clamp(toNumber(nested.crestFactor, previous.crestFactor), 0, 6),
+    mood,
+    dominantRange,
+    energyCharacter,
+    timestamp: Date.now(),
+    isAnalyzing: true,
+  };
+}
 
 function calculateSpectralCentroid(data: Uint8Array, sampleRate: number): number {
   let weightedSum = 0;
@@ -113,6 +233,39 @@ function calculateSpectralFlatness(data: Uint8Array): number {
   return arithmeticMean > 0 ? geometricMean / arithmeticMean : 0;
 }
 
+function calculateSpectralSpread(data: Uint8Array, sampleRate: number, centroid: number): number {
+  let weightedVariance = 0;
+  let sum = 0;
+  const binWidth = sampleRate / (data.length * 2);
+
+  for (let i = 0; i < data.length; i++) {
+    const magnitude = data[i] / 255;
+    const frequency = i * binWidth;
+    const delta = frequency - centroid;
+    weightedVariance += magnitude * delta * delta;
+    sum += magnitude;
+  }
+
+  return sum > 0 ? Math.sqrt(weightedVariance / sum) : 0;
+}
+
+function calculateSpectralEntropy(data: Uint8Array): number {
+  const eps = 1e-12;
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    sum += data[i] / 255;
+  }
+  if (sum <= eps) return 0;
+
+  let entropy = 0;
+  for (let i = 0; i < data.length; i++) {
+    const p = (data[i] / 255) / sum;
+    if (p > eps) entropy -= p * Math.log2(p);
+  }
+  const maxEntropy = Math.log2(data.length || 1);
+  return maxEntropy > 0 ? clamp(entropy / maxEntropy) : 0;
+}
+
 function classifyMood(metrics: Partial<AudioReactiveMetrics>): MoodCategory {
   const { overall, bass, highs, transients, beatStrength } = metrics;
   
@@ -151,17 +304,25 @@ export function useAudioReactive({
   sourceStream,
   onMetrics,
   fftSize = 2048,
-  updateIntervalMs = 100,
+  updateIntervalMs = 500,
+  provider = "webaudio",
+  oscBridgeUrl = process.env.NEXT_PUBLIC_OSC_BRIDGE_WS_URL || DEFAULT_OSC_BRIDGE_URL,
 }: UseAudioReactiveOptions) {
-  const [metrics, setMetrics] = useState<AudioReactiveMetrics>({
-    subBass: 0, bass: 0, lowMids: 0, mids: 0, upperMids: 0, highs: 0,
-    overall: 0, rms: 0, peak: 0, dynamics: 0,
-    spectralCentroid: 0, spectralRolloff: 0, spectralFlatness: 0, spectralFlux: 0, spectralContrast: 0,
-    zeroCrossingRate: 0, transients: 0, rhythmStability: 0,
-    beatDetected: false, beatStrength: 0, tempo: 0, tempoConfidence: 0,
-    mood: 'calm', dominantRange: 'mids', energyCharacter: 'calm',
-    timestamp: Date.now(), isAnalyzing: false,
+  const [metrics, setMetrics] = useState<AudioReactiveMetrics>(buildEmptyMetrics);
+  const [health, setHealth] = useState<AudioReactiveHealth>({
+    provider,
+    oscConnected: false,
+    oscFailures: 0,
+    fallbackActive: provider === "hybrid",
+    effectiveUpdateIntervalMs: updateIntervalMs,
   });
+  const lastExternalMetricsAtRef = useRef<number>(0);
+  const previousBassRef = useRef<number>(0);
+  const wsFailureCountRef = useRef<number>(0);
+  const lastWsWarnAtRef = useRef<number>(0);
+  const oscConnectedRef = useRef<boolean>(false);
+  const useWebAudio = provider === "webaudio" || provider === "hybrid";
+  const useExternalProvider = provider === "osc" || provider === "maxmsp" || provider === "hybrid";
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -179,6 +340,7 @@ export function useAudioReactive({
   const bpmRef = useRef<number>(0);
   const bpmConfidenceRef = useRef<number>(0);
   const lastBpmUpdateRef = useRef<number>(0);
+  const beatIntervalMsRef = useRef<number>(0);
 
   const processAudio = useCallback(() => {
     if (!analyserRef.current || !frequencyDataRef.current || !timeDataRef.current) return null;
@@ -232,10 +394,14 @@ export function useAudioReactive({
     const rms = clamp(Math.sqrt(rmsSum / timeData.length) * 2);
     const normalizedPeak = clamp(peak);
     const dynamics = rms > 0 ? normalizedPeak / rms : 0;
+    const crestFactor = dynamics;
+    const loudnessDb = 20 * Math.log10(Math.max(1e-6, rms));
     
     const spectralCentroid = calculateSpectralCentroid(freqData, sampleRate);
     const spectralRolloff = calculateSpectralRolloff(freqData, sampleRate);
     const spectralFlatness = calculateSpectralFlatness(freqData);
+    const spectralSpread = calculateSpectralSpread(freqData, sampleRate, spectralCentroid);
+    const spectralEntropy = calculateSpectralEntropy(freqData);
     
     let spectralFlux = 0;
     if (previousSpectrumRef.current) {
@@ -279,7 +445,14 @@ export function useAudioReactive({
     let beatDetected = false;
     let beatStrength = 0;
     
-    if (bass > beatThresholdRef.current && now - lastBeatTimeRef.current > beatCooldownRef.current) {
+    const bassDelta = bass - previousBassRef.current;
+    const intervalFromTempo = bpmRef.current > 0 ? Math.round((60000 / bpmRef.current) * 0.55) : 320;
+    const effectiveBeatCooldown = Math.max(220, Math.min(900, intervalFromTempo));
+    if (
+      bass > beatThresholdRef.current &&
+      bassDelta > 0.05 &&
+      now - lastBeatTimeRef.current > effectiveBeatCooldown
+    ) {
       beatDetected = true;
       beatStrength = clamp(bass);
       lastBeatTimeRef.current = now;
@@ -288,11 +461,17 @@ export function useAudioReactive({
       if (beatHistoryRef.current.length > 10) {
         beatHistoryRef.current.shift();
       }
+      if (beatHistoryRef.current.length >= 2) {
+        const last = beatHistoryRef.current[beatHistoryRef.current.length - 1];
+        const prev = beatHistoryRef.current[beatHistoryRef.current.length - 2];
+        beatIntervalMsRef.current = Math.max(0, last - prev);
+      }
       
       beatThresholdRef.current = Math.max(0.4, bass * 0.85);
     } else {
       beatThresholdRef.current = Math.min(0.7, beatThresholdRef.current + 0.0005);
     }
+    previousBassRef.current = bass;
     
     let rhythmStability = 0;
     if (beatHistoryRef.current.length >= 3) {
@@ -312,6 +491,7 @@ export function useAudioReactive({
       }
       const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
       const estimatedBpm = 60000 / avgInterval;
+      beatIntervalMsRef.current = avgInterval;
       
       if (now - lastBpmUpdateRef.current > 5000) {
         if (estimatedBpm >= 60 && estimatedBpm <= 200) {
@@ -327,30 +507,39 @@ export function useAudioReactive({
     const mood = classifyMood({ overall, bass, highs, transients, beatStrength });
     const dominantRange = getDominantRange({ subBass, bass, lowMids, mids, upperMids, highs });
     const energyCharacter = getEnergyCharacter(overall, beatStrength);
+    const onsetStrength = clamp((spectralFlux * 0.5) + (transients * 0.5));
+    const lowHighRatio = (subBass + bass + lowMids) / Math.max(1e-4, highs + upperMids);
     
     return {
-      subBass: clamp(subBass * 2),
-      bass: clamp(bass * 2),
-      lowMids: clamp(lowMids * 2),
-      mids: clamp(mids * 2),
-      upperMids: clamp(upperMids * 2),
-      highs: clamp(highs * 2),
-      overall,
-      rms,
+      subBass: clamp(subBass * 1.15),
+      bass: clamp(bass * 1.2),
+      lowMids: clamp(lowMids * 1.15),
+      mids: clamp(mids * 1.15),
+      upperMids: clamp(upperMids * 1.1),
+      highs: clamp(highs * 1.1),
+      overall: clamp(overall * 1.05),
+      rms: clamp(rms * 1.1),
       peak: normalizedPeak,
       dynamics: clamp(dynamics),
       spectralCentroid,
       spectralRolloff,
-      spectralFlatness: clamp(spectralFlatness * 2),
+      spectralFlatness: clamp(spectralFlatness * 1.3),
       spectralFlux,
       spectralContrast,
+      spectralSpread,
+      spectralEntropy,
       zeroCrossingRate,
       transients,
       rhythmStability,
+      onsetStrength,
       beatDetected,
       beatStrength,
       tempo: bpmRef.current,
       tempoConfidence: bpmConfidenceRef.current,
+      beatIntervalMs: beatIntervalMsRef.current,
+      lowHighRatio: clamp(lowHighRatio, 0, 10),
+      loudnessDb,
+      crestFactor: clamp(crestFactor, 0, 6),
       mood,
       dominantRange,
       energyCharacter,
@@ -360,9 +549,7 @@ export function useAudioReactive({
   }, []);
 
   useEffect(() => {
-    console.log("[AudioReactive] Setup effect - enabled:", enabled, "sourceStream:", !!sourceStream);
-    if (!enabled || !sourceStream) {
-      console.log("[AudioReactive] Disabling analysis");
+    if (!enabled || !useWebAudio || !sourceStream) {
       if (sourceRef.current) {
         sourceRef.current.disconnect();
         sourceRef.current = null;
@@ -379,12 +566,10 @@ export function useAudioReactive({
 
     const audioTrack = sourceStream.getAudioTracks()[0];
     if (!audioTrack) {
-      console.log("[AudioReactive] No audio track in source stream");
       return;
     }
 
     try {
-      console.log("[AudioReactive] Setting up audio analysis...");
       const audioContext = new AudioContext();
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = fftSize;
@@ -403,13 +588,12 @@ export function useAudioReactive({
       beatThresholdRef.current = 0.55;
       bpmRef.current = 0;
       bpmConfidenceRef.current = 0;
-      console.log("[AudioReactive] Analysis setup complete, frequency bins:", analyser.frequencyBinCount);
+      beatIntervalMsRef.current = 0;
     } catch (err) {
       console.error("[AudioReactive] Failed to setup audio:", err);
     }
 
     return () => {
-      console.log("[AudioReactive] Cleanup - disconnecting audio");
       if (sourceRef.current) {
         sourceRef.current.disconnect();
         sourceRef.current = null;
@@ -422,33 +606,119 @@ export function useAudioReactive({
       frequencyDataRef.current = null;
       timeDataRef.current = null;
     };
-  }, [enabled, sourceStream, fftSize]);
+  }, [enabled, sourceStream, fftSize, useWebAudio]);
 
   useEffect(() => {
-    if (!enabled) {
-      console.log("[AudioReactive] Stopping analysis loop - disabled");
-      setMetrics(prev => ({ ...prev, isAnalyzing: false }));
+    setHealth((prev) => ({
+      ...prev,
+      provider,
+      fallbackActive: provider === "hybrid" && !oscConnectedRef.current,
+      effectiveUpdateIntervalMs: updateIntervalMs,
+    }));
+  }, [provider, updateIntervalMs]);
+
+  useEffect(() => {
+    if (!enabled || !useExternalProvider) return;
+
+    let isCancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let ws: WebSocket | null = null;
+
+    const connect = () => {
+      if (isCancelled) return;
+      try {
+        ws = new WebSocket(oscBridgeUrl);
+      } catch (err) {
+        reconnectTimer = setTimeout(connect, 2500);
+        return;
+      }
+
+      ws.onopen = () => {
+        oscConnectedRef.current = true;
+        wsFailureCountRef.current = 0;
+        setHealth((prev) => ({
+          ...prev,
+          oscConnected: true,
+          oscFailures: 0,
+          fallbackActive: provider === "hybrid" ? false : prev.fallbackActive,
+        }));
+        try {
+          ws?.send(JSON.stringify({ type: "subscribe", channel: "audio_metrics" }));
+        } catch {}
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data as string);
+          setMetrics((prev) => {
+            const payload = parsed?.data ?? parsed;
+            const normalized = normalizeExternalMetrics(payload, prev);
+            if (!normalized) return prev;
+            lastExternalMetricsAtRef.current = normalized.timestamp;
+            onMetrics?.(normalized);
+            return normalized;
+          });
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        const now = Date.now();
+        if (now - lastWsWarnAtRef.current > 20000) {
+          console.warn("[AudioReactive] OSC/Max bridge unavailable; using local WebAudio metrics.");
+          lastWsWarnAtRef.current = now;
+        }
+      };
+
+      ws.onclose = () => {
+        oscConnectedRef.current = false;
+        if (!isCancelled) {
+          wsFailureCountRef.current += 1;
+          const backoffMs = Math.min(30000, 2500 * wsFailureCountRef.current);
+          setHealth((prev) => ({
+            ...prev,
+            oscConnected: false,
+            oscFailures: wsFailureCountRef.current,
+            fallbackActive: provider === "hybrid",
+          }));
+          reconnectTimer = setTimeout(connect, backoffMs);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      isCancelled = true;
+      oscConnectedRef.current = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
+    };
+  }, [enabled, useExternalProvider, oscBridgeUrl, onMetrics, provider]);
+
+  useEffect(() => {
+    if (!enabled || !useWebAudio) {
+      if (!enabled) {
+        setMetrics(prev => ({ ...prev, isAnalyzing: false }));
+      }
       return;
     }
 
     let animationId: number;
     let lastUpdateAt = 0;
-    let frameCount = 0;
 
     const analyze = (now: number) => {
       if (now - lastUpdateAt >= updateIntervalMs) {
         lastUpdateAt = now;
         const result = processAudio();
         if (result) {
-          if (frameCount % 20 === 0) {
-            console.log("[AudioReactive] Metrics update:", {
-              overall: result.overall.toFixed(3),
-              mood: result.mood,
-              beat: result.beatDetected,
-              tempo: result.tempo.toFixed(1),
-            });
+          const externalIsFresh = Date.now() - lastExternalMetricsAtRef.current < 1200;
+          if (provider === "hybrid" && externalIsFresh) {
+            animationId = requestAnimationFrame(analyze);
+            return;
           }
-          frameCount++;
+
           setMetrics(result);
           onMetrics?.(result);
         }
@@ -456,17 +726,16 @@ export function useAudioReactive({
       animationId = requestAnimationFrame(analyze);
     };
 
-    console.log("[AudioReactive] Starting analysis loop");
     animationId = requestAnimationFrame(analyze);
 
     return () => {
-      console.log("[AudioReactive] Stopping analysis loop");
       cancelAnimationFrame(animationId);
     };
-  }, [enabled, processAudio, onMetrics, updateIntervalMs]);
+  }, [enabled, useWebAudio, processAudio, onMetrics, updateIntervalMs, provider]);
 
   return {
     metrics,
     isAnalyzing: metrics.isAnalyzing,
+    health,
   };
 }

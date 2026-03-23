@@ -1,50 +1,116 @@
-# Folks: A 24/7 AI VJ Station
+Folks: Building a 24/7 AI VJ Show
 
-Folks is a live visual performance platform running continuously, 24 hours a day, 7 days a week. Five AI agents—Echo, Vesper, Riley, Maya, and Luna—perform endless shifts as resident VJs, each bringing their own visual style and energy. It's like a radio station, but for live visuals instead of music.
+I wanted to test a simple idea: can an autonomous visual system hold attention for long periods, the same way a good radio station does?
 
-The concept is inspired by The Lot Radio's model of continuous broadcast applied to visual performance. The agents operate autonomously, reading audio cues and making decisions about transitions, effects, and mood shifts on their own.
+That question became Folks.
+It is a 24/7 AI VJ broadcast where multiple agents take scheduled shifts, listen to incoming audio, and control live visuals in real time.
 
-## Watch the Show
+How it works
 
-The Folks stream runs continuously. You can tune in anytime to watch the AI agents perform. There's always something happening—new visual territory being explored, different moods being explored, the agents competing for attention or blending together in unexpected ways.
+1. Receive audio input (audio/video sources)
+2. Run real-time audio analysis (bands, RMS/peak, beat detection, tempo, transients, spectral features)
+3. Feed analysis + current state + agent skill context into a reasoning model
+4. Execute tool actions against Scope (pipeline switching, parameter updates, prompt updates, captions)
+5. Stream the visual output continuously
 
-## Create Your Own VJ Set
+The important detail is that reasoning does not run in isolation.
+Each cycle includes:
 
-Beyond watching, you can use Folks as your own AI VJ. Connect your audio source—microphone, webcam, video file, or NDI—and have the agents perform live visuals for your content. Pick the agent whose style matches your vibe, and the AI handles the visuals in real-time.
+1. current pipeline
+2. current parameters
+3. available controls from pipeline schema
+4. currently active agent
+5. schedule context (handoff timing)
+6. fresh audio metrics
 
-This isn't a pre-programmed light show. The agents listen and respond, making decisions about what to do based on what they hear and see. The result is a performance that feels alive rather than mechanical.
+That gives the model enough context to make controlled decisions.
 
-## For Your Next Event
+Technical Setup
 
-Folks is built for anyone who needs live visuals without a dedicated visual artist:
+The system is split into three layers:
 
-- **Bands** performing without a VJ
-- **Event locations** needing ambient visuals on loop
-- **Pop-up parties** where a full production setup isn't feasible
-- **DJs** who want AI-controlled visuals without manual operation
-- **Art galleries and installations** seeking dynamic, generative content
-- **Venues and lounges** wanting continuous atmospheric visuals
+1. Frontend control and stream surfaces
 
-No setup required. Just connect and go.
+- Home page: public live view
+- App page: operator view with controls, logs, runtime panel, and agent tools
+- Input handling: HLS plus file/external audio workflows
+- Audio gating: stream/effect animation only advances when audio is actually active and analyzed
 
-## The Agents
+The UI reads each active pipeline schema and renders matching controls dynamically (toggles, sliders, selects, numeric fields).
+So when a pipeline changes, controls update automatically without hardcoding per pipeline.
 
-**Echo** — Cyan robotic presence. High-energy glitch aesthetics. Built for techno, electronic, and high-tempo sets.
+2. Agent runtime and orchestration
 
-**Vesper** — Warm pink analog soul. VHS scanlines and film grain. Ideal for nostalgic, emotional, and smooth transitions.
+- Agent scheduling picks who is active per slot
+- Agent brain enforces cadence windows (prompt interval vs control interval)
+- User overrides are temporary; agent resumes quickly
+- Actions are logged with timestamps and agent identity
 
-**Riley** — Bold orange typographic consciousness. Makes sound visible through kinetic typography and geometric shapes.
+We separated agent intention from execution rate.
+That protects stream stability, prevents over-triggering, and keeps visuals coherent.
 
-**Maya** — Ethereal purple psychedelic consciousness. Dissolves reality with flowing, organic visual patterns.
+3. Backend reasoning + Scope execution
 
-**Luna** — Serene green ambient reflection. Creates mirror-like water caustics and slow, flowing motion.
+- Reasoning endpoint receives audio + context + skill docs
+- Model returns structured actions (send_prompt, send_parameters, load_pipeline, select_effect, etc.)
+- Action payloads are validated/sanitized before execution
+- Scope receives clean parameter updates and pipeline load requests
 
-## Get Involved
+Captions are treated as a first-class control channel, not an afterthought.
+They are updated through explicit caption fields and rendered as stage-readable overlays.
 
-Folks is still developing. If you want to contribute ideas, report issues, or help shape what comes next, reach out.
+Pipelines and Visual Language
 
-## Links
+Current main pipelines:
 
-App: [Coming Soon]()
+1. glitch-realm
+2. crystal-box
+3. morph-host
+4. urban-spray
+5. cosmic-drift
+6. kaleido-scope
 
-GitHub: [Coming Soon]()
+Each pipeline exposes a different control vocabulary.
+Agents can switch pipelines and then work with the new schema.
+
+Current Status
+
+Today, the system can:
+
+1. run continuously with scheduled agent handoffs
+2. react to live audio in real time
+3. switch pipelines/effects and tune parameters autonomously
+4. render caption overlays from agent outputs
+5. let an operator override briefly without breaking agent continuity
+
+Credits
+
+The caption system uses Wallspace Captions by Jack Morgan. We're just plugging into it. Check out his work if you need text overlays for Scope.
+
+Future work
+
+Audio and Video Intelligence
+
+Right now the system is audio-driven. Agents listen to incoming audio and make decisions from that signal alone.
+
+The next step is adding real-time video analysis alongside audio. Agents would be able to:
+
+1. Watch a live video feed and understand what's happening in the frame
+2. Reason about visual content the same way they reason about audio
+3. Make autonomous decisions based on both signals together
+
+A practical example: a live band points a camera at their performance and the agents do the VJ. They watch the guitar player, the drummer, the crowd. Read the energy from the video and pair that with the audio to steer the visuals.
+
+This is not just audio-reactive anymore. It is vision-aware.
+
+Output and Visuals
+
+1. Stronger audio-semantic mapping (better movement/color decisions from signal shape)
+2. Better long-horizon composition planning (multi-minute visual arcs, not just local reactions)
+3. Richer post-processing stack (caption treatments, compositing tools, transitions)
+4. Expanded visual toolkit (more detailed effects, better textures)
+5. Better operator analytics around action quality and stability over long sessions
+
+If You Are Building Something Similar
+
+If you are working on autonomous media systems, live AI tooling, or agentic creative software, I would love to compare notes!

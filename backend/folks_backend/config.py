@@ -1,4 +1,4 @@
-"""OpenScope configuration."""
+"""Folks configuration."""
 
 from functools import lru_cache
 from typing import Optional
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     scope_cloud_user_id: Optional[str] = None
 
     # App
-    app_name: str = "OpenScope"
+    app_name: str = "Folks"
     debug: bool = False
 
     class Config:

@@ -1,22 +1,92 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Anton, Space_Grotesk } from "next/font/google";
-import { Loader2, ExternalLink, Joystick, Radio, Calendar, Info, ShoppingBag, ChevronDown } from "lucide-react";
-import AuthModal from "@/components/AuthModal";
+import { Loader2, ExternalLink, Joystick, Radio, Calendar, Info, ShoppingBag, ChevronDown, Pause, Play } from "lucide-react";
 import EffectVideoPlayer from "@/components/EffectVideoPlayer";
 import HLSPlayer from "@/components/HLSPlayer";
 import SkillDialog from "@/components/SkillDialog";
 import AudioInitDialog from "@/components/AudioInitDialog";
-import { supabase } from "@/lib/supabase";
 import { useScopeServer } from "@/hooks/useScopeServer";
 import { useAudioExtractor } from "@/hooks/useAudioExtractor";
-import { useAudioReactive } from "@/hooks/useAudioReactive";
+import { AudioMetricsProvider, useAudioReactive } from "@/hooks/useAudioReactive";
 import { useAudioPlayer } from "@/context/AudioPlayerContext";
 import { AGENTS } from "@/components/AgentSprite";
+import { useAgentSchedule } from "@/hooks/useAgentSchedule";
+import { useAgentBrain, AgentLog } from "@/hooks/useAgentBrain";
 
 const HLS_URL = "https://mdw-prod-catalyst-0.lp-playback.studio/hls/video+85c28sa2o8wppm58/1_0/index.m3u8?tkn=3158657102";
+const clampInterval = (value: number, min: number, max: number) => {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+};
+const PROMPT_INTERVAL_MS = clampInterval(Number(process.env.NEXT_PUBLIC_AGENT_PROMPT_INTERVAL_MS || 30_000), 30_000, 40_000);
+const CONTROL_INTERVAL_MS = clampInterval(Number(process.env.NEXT_PUBLIC_AGENT_CONTROL_INTERVAL_MS || 10_000), 10_000, 20_000);
+const REASONING_INTERVAL_MS = clampInterval(Number(process.env.NEXT_PUBLIC_AGENT_REASONING_INTERVAL_MS || 10_000), 10_000, 20_000);
+const EFFECT_VIDEO_URLS = (process.env.NEXT_PUBLIC_EFFECT_VIDEO_URLS || "")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+const DEFAULT_EFFECT_NUMBERS = [6, 8, 9, 10, 11];
+const EFFECT_VIDEOS = EFFECT_VIDEO_URLS.length
+  ? EFFECT_VIDEO_URLS
+  : DEFAULT_EFFECT_NUMBERS.map((num) => `/effect${num}.mp4`);
+const EFFECT_COUNT = EFFECT_VIDEOS.length;
+const SCOPE_ENV = (process.env.NEXT_PUBLIC_SCOPE_ENV || "prod").toLowerCase();
+const IS_LOCAL_SCOPE = SCOPE_ENV === "local";
+const STARTUP_PIPELINES = IS_LOCAL_SCOPE
+  ? ["longlive"]
+  : [
+      "kaleido-scope",
+      "glitch-realm",
+      "crystal-box",
+      "morph-host",
+      "urban-spray",
+      "cosmic-drift",
+    ];
+const CAPTION_POST_PIPELINE_CANDIDATES = [
+  "scope-wallspace-captions-post",
+  "scope-wallspace-captions",
+  "wallspace-captions-post",
+  "wallspace-captions-pre",
+  "wallspace-captions",
+];
+
+function resolveCaptionPostPipelineId(pipelines: Record<string, unknown>): string | null {
+  for (const id of CAPTION_POST_PIPELINE_CANDIDATES) {
+    if (pipelines?.[id]) return id;
+  }
+  return null;
+}
+
+function composePipelineChain(mainPipelineId: string, pipelines: Record<string, unknown>): string[] {
+  const captionPost = resolveCaptionPostPipelineId(pipelines);
+  if (captionPost && captionPost !== mainPipelineId) {
+    return [mainPipelineId, captionPost];
+  }
+  return [mainPipelineId];
+}
+
+function captionManualDefaults(): Record<string, unknown> {
+  return {
+    text_source: "manual",
+    prompt_enabled: false,
+    overlay_enabled: true,
+    position_preset: "center",
+    text_align: "center",
+    font_weight: "bold",
+    font_size: 64,
+    outline_enabled: true,
+    outline_width: 3,
+    outline_color_r: 0,
+    outline_color_g: 0,
+    outline_color_b: 0,
+    text_color_r: 255,
+    text_color_g: 230,
+    text_color_b: 120,
+  };
+}
 
 const anton = Anton({
   subsets: ["latin"],
@@ -89,158 +159,185 @@ const weeklySchedule = scheduleDays.map((day: ScheduleDay, dayIndex: number) => 
 export default function Home() {
   const mainVideoRef = useRef<HTMLVideoElement>(null);
 
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [user, setUser] = useState<{ email?: string; avatar_url?: string } | null>(null);
   const [hasStartedStream, setHasStartedStream] = useState(false);
   const [expandedDay, setExpandedDay] = useState<string | null>(weeklySchedule[0]?.date ?? null);
   const [selectedEffect, setSelectedEffect] = useState(1);
   const [isAgentActive, setIsAgentActive] = useState(false);
+  const [isPlaybackPaused, setIsPlaybackPaused] = useState(false);
   const [currentAgent, setCurrentAgent] = useState("Echo");
   const [currentMood, setCurrentMood] = useState("neutral");
+  const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
+  const [currentParameters, setCurrentParameters] = useState<Record<string, unknown>>({});
+  const [currentPlugins, setCurrentPlugins] = useState<string[]>([]);
+  const [audioProvider] = useState<AudioMetricsProvider>(
+    (process.env.NEXT_PUBLIC_AUDIO_METRICS_PROVIDER as AudioMetricsProvider) || "webaudio"
+  );
   const [isStartingScope, setIsStartingScope] = useState(false);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const agentIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isStartingScopeRef = useRef(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const startWatchdogRef = useRef<NodeJS.Timeout | null>(null);
   const startScopeSessionRef = useRef<() => void>(() => {});
   const effectStreamRef = useRef<MediaStream | null>(null);
+  const userOverrideRef = useRef<() => void>(() => {});
 
-  const { isConnected, isConnecting, error: connectionError, startWebRTC, stopWebRTC, loadPipeline, sendParameterUpdate, fetchPipelines } = useScopeServer();
+  const {
+    isConnected,
+    isConnecting,
+    error: connectionError,
+    startWebRTC,
+    stopWebRTC,
+    loadPipeline,
+    sendParameterUpdate,
+    fetchPipelines,
+    pipelines,
+    activePipeline,
+    installPlugin,
+    configureNDI,
+  } = useScopeServer();
 
   const { audioStream, initAudio, isReady: audioReady } = useAudioExtractor({
     hlsUrl: HLS_URL,
   });
 
   const { metrics: audioMetrics } = useAudioReactive({
-    enabled: isAgentActive && !!audioStreamRef.current,
+    enabled: isAgentActive && (!!audioStreamRef.current || audioProvider !== "webaudio"),
     sourceStream: audioStreamRef.current,
+    provider: audioProvider,
+    updateIntervalMs: 750,
   });
 
-  const [agentPrompt, setAgentPrompt] = useState("vibrant abstract visuals with dynamic colors");
   const [showAudioInitDialog, setShowAudioInitDialog] = useState(true);
+  const [isUnmuted, setIsUnmuted] = useState(false);
+  const [audioConsentGranted, setAudioConsentGranted] = useState(false);
   const [showSkillDialog, setShowSkillDialog] = useState(false);
   const [selectedAgentForSkill, setSelectedAgentForSkill] = useState("");
 
+  useEffect(() => {
+    setSelectedEffect(Math.floor(Math.random() * EFFECT_COUNT) + 1);
+  }, []);
+
   const { setAudioEnabled, muteAll } = useAudioPlayer();
+  const hasAnalyzedAudio =
+    audioMetrics.isAnalyzing &&
+    (audioMetrics.rms > 0.002 || audioMetrics.peak > 0.01 || audioMetrics.overall > 0.01);
+  const shouldPauseEffects = isPlaybackPaused || !audioConsentGranted || !hasAnalyzedAudio;
+
+  const { activeAgent } = useAgentSchedule({
+    enabled: isAgentActive,
+  });
 
   const handleEffectStreamReady = useCallback((stream: MediaStream) => {
     effectStreamRef.current = stream;
-    console.log("[Effect] Stream ready:", stream.getVideoTracks().length, "video tracks");
   }, []);
 
   const handleEnableAudio = () => {
-    console.log("[Home] handleEnableAudio called");
     setAudioEnabled(true);
     setShowAudioInitDialog(false);
+    setAudioConsentGranted(true);
+    setIsPlaybackPaused(false);
+    setIsUnmuted(true);
     initAudio();
     setIsAgentActive(true);
-    console.log("[Agent] Starting agent reasoning...");
-    callAgentReasoning();
-    if (agentIntervalRef.current) {
-      clearInterval(agentIntervalRef.current);
-    }
-    console.log("[Agent] Setting up reasoning interval (10s)");
-    agentIntervalRef.current = setInterval(callAgentReasoning, 30000);
   };
 
-  const callAgentReasoning = useCallback(async () => {
-    if (!audioStreamRef.current || !isAgentActive) {
-      console.log("[Agent] Skipping reasoning - audioStream:", !!audioStreamRef.current, "isActive:", isAgentActive);
-      return;
-    }
+  useEffect(() => {
+    setAudioEnabled(false);
+    setIsAgentActive(false);
+  }, [setAudioEnabled]);
 
-    const agentName = currentAgent.toLowerCase();
-    console.log(`[Agent] ${agentName} reasoning cycle starting...`);
-    console.log(`[Agent] Audio metrics:`, JSON.stringify(audioMetrics, null, 2));
+  const togglePlaybackPause = useCallback(() => {
+    userOverrideRef.current();
+    const nextPaused = !isPlaybackPaused;
+    setIsPlaybackPaused(nextPaused);
+    setIsUnmuted(!nextPaused);
 
-    try {
-      console.log("[Agent] Sending reasoning request to /api/agents/reason");
-      const response = await fetch("/api/agents/reason", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agent: agentName,
-          skill: "",
-          audio_metrics: audioMetrics || {
-            overall: 0.5,
-            beatDetected: false,
-            tempo: 0,
-            mood: "calm",
-            dominantRange: "mids",
-          },
-          current_state: {
-            pipeline: "passthrough",
-            parameters: {},
-            plugins: [],
-            mood: "neutral",
-            current_effect: selectedEffect,
-          },
-        }),
-      });
-
-    
-
-      const result = await response.json();
-      console.log("[Agent] Reasoning response:", JSON.stringify(result, null, 2));
-
-      if (result.mood) {
-        console.log(`[Agent] Mood changed to: ${result.mood}`);
-        setCurrentMood(result.mood);
+    if (mainVideoRef.current) {
+      mainVideoRef.current.muted = nextPaused;
+      if (nextPaused) {
+        mainVideoRef.current.pause();
+      } else {
+        mainVideoRef.current.play().catch(() => undefined);
       }
-
-      if (result.actions) {
-        console.log(`[Agent] Processing ${result.actions.length} actions`);
-        for (const action of result.actions) {
-          if (action.type === "send_prompt" && action.prompt) {
-            console.log(`[Agent] Action: send_prompt - "${action.prompt.substring(0, 50)}..."`);
-            setAgentPrompt(action.prompt);
-            console.log("[Scope] Sending prompt to server...");
-            sendParameterUpdate({
-              transition: {
-                target_prompts: [{ text: action.prompt, weight: 1.0 }],
-                num_steps: 8
-              }
-            });
-          } else if (action.type === "select_effect" && action.effect_number) {
-            console.log(`[Agent] Action: select_effect - effect ${action.effect_number}`);
-            setSelectedEffect(action.effect_number);
-          } else {
-            console.log(`[Agent] Action: ${action.type}`, action);
-          }
-        }
-      }
-      console.log(`[Agent] ${agentName} reasoning cycle complete`);
-    } catch (err) {
-      console.error(`[Agent] Reasoning error:`, err);
     }
-  }, [currentAgent, audioMetrics, selectedEffect, isAgentActive, sendParameterUpdate]);
+  }, [isPlaybackPaused]);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user: currentUser } }) => {
-      if (currentUser) {
-        setUser({
-          email: currentUser.email,
-          avatar_url: currentUser.user_metadata?.avatar_url,
-        });
-      }
-    });
+    if (!activeAgent) return;
+    setCurrentAgent(activeAgent.name);
+  }, [activeAgent]);
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUser({
-          email: session.user.email,
-          avatar_url: session.user.user_metadata?.avatar_url,
-        });
-      } else {
-        setUser(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+  const handleAgentLog = useCallback((log: AgentLog) => {
+    setAgentLogs((prev) => [log, ...prev].slice(0, 100));
   }, []);
+
+  const scopeInterface = useMemo(() => ({
+    sendParameter: (params: Record<string, unknown>) => {
+      setCurrentParameters((prev) => ({ ...prev, ...params }));
+      sendParameterUpdate(params);
+    },
+    loadPipeline: async (id: string) => {
+      const chain = composePipelineChain(id, pipelines as Record<string, unknown>);
+      await loadPipeline(chain, { input_mode: "video" });
+      sendParameterUpdate(captionManualDefaults());
+    },
+    installPlugin: async (spec: string) => {
+      await installPlugin(spec);
+      setCurrentPlugins((prev) => (prev.includes(spec) ? prev : [...prev, spec]));
+    },
+    configureNDI: async (enabled: boolean, name: string) => {
+      await configureNDI(enabled, name);
+    },
+    getCurrentPipeline: () => activePipeline || "kaleido-scope",
+    getCurrentParameters: () => currentParameters,
+    getCurrentPlugins: () => currentPlugins,
+  }), [sendParameterUpdate, loadPipeline, installPlugin, configureNDI, activePipeline, currentParameters, currentPlugins, pipelines]);
+
+  const { handleUserOverride } = useAgentBrain({
+    agent: activeAgent || AGENTS[0],
+    audioStream: audioStreamRef.current,
+    audioMetricsOverride: audioMetrics,
+    isActive: isAgentActive && hasStartedStream,
+    scope: scopeInterface,
+    onLog: handleAgentLog,
+    onMoodChange: setCurrentMood,
+    onEffectChange: setSelectedEffect,
+    currentEffect: selectedEffect,
+    effectCount: EFFECT_COUNT,
+    reasoningInterval: REASONING_INTERVAL_MS,
+    promptIntervalMs: PROMPT_INTERVAL_MS,
+    controlIntervalMs: CONTROL_INTERVAL_MS,
+    overrideCooldownMs: 1500,
+    reasoningContext: {
+      analyzer: {
+        provider: audioProvider,
+        source: "hls",
+      },
+      pipelines: Object.entries(pipelines || {}).map(([id, info]) => {
+        const pipeline = info as any;
+        const schema = pipeline?.config_schema || {};
+        const schemaRoot = schema?.properties && typeof schema.properties === "object" ? schema.properties : schema;
+        const controls = Object.entries(schemaRoot || {}).map(([key, field]: [string, any]) => ({
+          key,
+          type: field?.type || "any",
+          description: field?.description || "",
+          enum: Array.isArray(field?.enum) ? field.enum : undefined,
+          min: typeof field?.minimum === "number" ? field.minimum : typeof field?.ge === "number" ? field.ge : undefined,
+          max: typeof field?.maximum === "number" ? field.maximum : typeof field?.le === "number" ? field.le : undefined,
+        }));
+        return {
+          id,
+          name: pipeline?.pipeline_name || id,
+          description: pipeline?.pipeline_description || "",
+          controls,
+        };
+      }),
+    },
+  });
+
+  useEffect(() => {
+    userOverrideRef.current = handleUserOverride;
+  }, [handleUserOverride]);
 
   useEffect(() => {
     fetchPipelines();
@@ -248,11 +345,49 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      setIsUnmuted(false);
+      setIsPlaybackPaused(true);
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+      }
+      document.querySelectorAll("video, audio").forEach((media) => {
+        const element = media as HTMLMediaElement;
+        element.muted = true;
+        element.pause();
+      });
       stopWebRTC();
       muteAll();
     
     };
   }, [stopWebRTC, muteAll]);
+
+  useEffect(() => {
+    const mutePageAudio = () => {
+      setIsUnmuted(false);
+      document.querySelectorAll("video, audio").forEach((media) => {
+        const element = media as HTMLMediaElement;
+        element.muted = true;
+        element.pause();
+      });
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        mutePageAudio();
+      }
+    };
+
+    window.addEventListener("pagehide", mutePageAudio);
+    window.addEventListener("beforeunload", mutePageAudio);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.removeEventListener("pagehide", mutePageAudio);
+      window.removeEventListener("beforeunload", mutePageAudio);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     if (audioStream) {
@@ -261,11 +396,7 @@ export default function Home() {
   }, [audioStream]);
 
   const handleBookAgents = () => {
-    if (user) {
-      window.location.href = "/app";
-    } else {
-      setShowAuthModal(true);
-    }
+    window.location.href = "/app";
   };
 
   const scheduleRetry = useCallback((delayMs: number, reason: string) => {
@@ -273,7 +404,6 @@ export default function Home() {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
-    console.log(`[Scope] Scheduling retry in ${Math.round(delayMs / 1000)}s (${reason})`);
     retryTimeoutRef.current = setTimeout(() => {
       startScopeSessionRef.current();
     }, delayMs) as unknown as NodeJS.Timeout;
@@ -282,11 +412,12 @@ export default function Home() {
   const startScopeSession = useCallback(
     async () => {
       if (isStartingScopeRef.current) {
-        console.log("[Scope] Start already in progress, skipping duplicate attempt");
+        return;
+      }
+      if (!audioConsentGranted || !hasAnalyzedAudio || isPlaybackPaused) {
         return;
       }
 
-      console.log("[Scope] Starting scope session...");
       isStartingScopeRef.current = true;
       setIsStartingScope(true);
       setHasStartedStream(false);
@@ -298,14 +429,15 @@ export default function Home() {
         }
 
         stopWebRTC();
-        console.log("[Scope] WebRTC stopped");
 
-        console.log("[Scope] Loading pipeline: kaleido-scope");
-        await loadPipeline(["kaleido-scope"], { input_mode: "video" });
-        console.log("[Scope] Pipeline loaded successfully");
+        const availableStartupPipelines = STARTUP_PIPELINES.filter((id) => Boolean(pipelines?.[id]));
+        const startupPipeline =
+          availableStartupPipelines[Math.floor(Math.random() * Math.max(1, availableStartupPipelines.length))] ||
+          "kaleido-scope";
+        const pipelineChain = composePipelineChain(startupPipeline, pipelines as Record<string, unknown>);
+        await loadPipeline(pipelineChain, { input_mode: "video" });
 
         if (!effectStreamRef.current) {
-          console.log("[Scope] Waiting for effect video stream...");
           await new Promise<void>((resolve) => {
             const timeout = setTimeout(resolve, 10000);
             const checkInterval = setInterval(() => {
@@ -325,10 +457,8 @@ export default function Home() {
           return;
         }
 
-        console.log("[Scope] Starting WebRTC connection...");
         await startWebRTC(
           (remoteStream) => {
-            console.log("[Scope] Remote stream received");
             if (mainVideoRef.current) {
               mainVideoRef.current.srcObject = remoteStream;
               mainVideoRef.current.play().catch(console.error);
@@ -338,12 +468,11 @@ export default function Home() {
               startWatchdogRef.current = null;
             }
             setHasStartedStream(true);
-            console.log("[Scope] Session started successfully!");
           },
           {
             input_mode: "video",
-            pipeline_ids: ["kaleido-scope"],
-            prompts: [{ text: agentPrompt, weight: 1.0 }],
+            pipeline_ids: pipelineChain,
+            ...captionManualDefaults(),
           },
           effectStreamRef.current
         );
@@ -351,7 +480,6 @@ export default function Home() {
 
         startWatchdogRef.current = setTimeout(() => {
           if (!mainVideoRef.current?.srcObject) {
-            console.warn("[Scope] No remote stream after 35s, forcing retry...");
             setHasStartedStream(false);
             stopWebRTC();
             scheduleRetry(3000, "no remote frames");
@@ -367,7 +495,7 @@ export default function Home() {
         setIsStartingScope(false);
       }
     },
-    [loadPipeline, scheduleRetry, startWebRTC, stopWebRTC, agentPrompt],
+    [loadPipeline, scheduleRetry, startWebRTC, stopWebRTC, pipelines, audioConsentGranted, hasAnalyzedAudio, isPlaybackPaused],
   );
 
   useEffect(() => {
@@ -381,11 +509,10 @@ export default function Home() {
       return;
     }
 
-    if (!hasStartedStream && !isStartingScope) {
-      console.log("[Scope] Connected and no stream yet, triggering session start");
+    if (!hasStartedStream && !isStartingScope && audioConsentGranted && hasAnalyzedAudio && !isPlaybackPaused) {
       startScopeSession();
     }
-  }, [isConnected, hasStartedStream, isStartingScope, startScopeSession]);
+  }, [isConnected, hasStartedStream, isStartingScope, startScopeSession, audioConsentGranted, hasAnalyzedAudio, isPlaybackPaused]);
 
   useEffect(() => {
     return () => {
@@ -416,7 +543,7 @@ export default function Home() {
             100% { transform: translateX(-50%); }
           }
           .scroll-text {
-            animation: scroll 20s linear infinite;
+            animation: scroll 40s linear infinite;
           }
         `}</style>
         <div className="flex py-2">
@@ -483,6 +610,14 @@ export default function Home() {
                   </div>
                 )}
                 <video ref={mainVideoRef} className="w-full h-full object-contain" autoPlay muted playsInline />
+                <button
+                  onClick={togglePlaybackPause}
+                  className="absolute top-6 right-6 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-white/30 bg-black/50 text-white hover:bg-black/70"
+                  aria-label={isPlaybackPaused ? "Play stream" : "Pause stream"}
+                  title={isPlaybackPaused ? "Play" : "Pause"}
+                >
+                  {isPlaybackPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                </button>
               </div>
               <div className="absolute left-6 top-6 flex flex-col gap-2 text-[11px] uppercase tracking-[0.35em] text-white/70">
                 <div className="flex items-center gap-3">
@@ -496,7 +631,7 @@ export default function Home() {
                 )}
               </div>
               <div className="absolute bottom-6 left-6 z-30 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/30 shadow-lg pointer-events-auto">
-                <HLSPlayer src={HLS_URL} muted className="w-full h-full" />
+                <HLSPlayer src={HLS_URL} muted={isPlaybackPaused} paused={isPlaybackPaused} unmute={isUnmuted} className="w-full h-full" />
               </div>
               <button
                 onClick={handleBookAgents}
@@ -518,10 +653,9 @@ export default function Home() {
                   own sets, streams, and events.
                 </p>
                 <p className="mt-4 text-sm uppercase tracking-[0.2em] text-white/60">
-                  Stream live from your apartment, plug into your venue, or hire the VJ agents for performances. All
-                  bookings go toward a donation that supports the Scope open-source project.
+                  Stream live from your apartment, plug into your venue, or hire the VJ agents for performances. 
                 </p>
-                <div className="mt-6 flex flex-wrap gap-3 text-xs uppercase tracking-[0.3em] text-white/60">
+                <div className="mt-6 flex flex-wrap gap-3 text-sm uppercase tracking-[0.3em] text-white/60">
                   <a
                     className="flex gap-2 items-center border border-white/30 px-4 py-2 hover:bg-white/5 transition-colors"
                     href="https://daydream.live/"
@@ -533,10 +667,10 @@ export default function Home() {
                   </a>
                   <button
                     onClick={handleBookAgents}
-                    className="flex items-center gap-2 border border-white/30 px-4 py-2 hover:bg-white/5 transition-colors"
+                    className="flex items-center gap-2 border text-sm uppercase border-yellow-400 px-4 py-2 hover:bg-white/5 transition-colors text-yellow-400"
                   >
                     <Joystick className="w-3 h-3" />
-                    Book The Agents
+                    Get started
                   </button>
                 </div>
               </div>
@@ -549,7 +683,7 @@ export default function Home() {
                       <span className="flex-1">{agent}</span>
                       <button
                         onClick={() => openSkillDialog(agent)}
-                        className="text-[10px] text-white/40 hover:text-white uppercase tracking-wider underline underline-offset-2"
+                        className="text-[10px] text-yellow-400 hover:text-white uppercase tracking-wider underline underline-offset-2"
                       >
                         View Skills
                       </button>
@@ -641,18 +775,10 @@ export default function Home() {
         </div>
       </footer>
 
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        onAuthSuccess={() => {
-          setShowAuthModal(false);
-          window.location.href = "/app";
-        }}
-      />
-
       <AudioInitDialog
         isOpen={showAudioInitDialog}
         onConfirm={handleEnableAudio}
+        setUnmuted={setIsUnmuted}
       />
 
       <SkillDialog
@@ -662,7 +788,10 @@ export default function Home() {
       />
 
       <EffectVideoPlayer
+        effects={EFFECT_VIDEOS}
         activeEffect={selectedEffect}
+        enabled={audioConsentGranted && hasAnalyzedAudio}
+        paused={shouldPauseEffects}
         onStreamReady={handleEffectStreamReady}
         width={576}
         height={320}

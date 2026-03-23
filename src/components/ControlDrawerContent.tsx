@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Camera, Music, Video, Layers, Radio, Wifi, WifiOff, Plus, X, ChevronDown, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Music, Video, Layers, Radio, Wifi, WifiOff, Plus, X, ChevronDown, Loader2, RefreshCw, RotateCcw, Trash2, Mic, Link2 } from "lucide-react";
 import { ShowSettings, saveSettings } from "./OnboardingModal";
 import { AGENTS, AgentHead, Agent } from "./AgentSprite";
 import { ActiveControlPanel } from "./SetControlHub";
 import { getBackendUrl } from "@/hooks/useScopeServer";
-import { AgentLog } from "@/hooks/useAgentBrain";
+import { AgentLog, AgentRuntimeMetrics } from "@/hooks/useAgentBrain";
+import { AudioReactiveHealth } from "@/hooks/useAudioReactive";
 
 const SCOPE_API_URL = "/api/scope";
 
@@ -26,15 +27,21 @@ interface ControlDrawerContentProps {
   configSchema: Record<string, any> | null;
   onParamChange: (key: string, value: any) => void;
   sendParameterUpdate: (params: Record<string, any>) => void;
+  currentParameters?: Record<string, any>;
   onStreamReady?: (stream: MediaStream | null) => void;
   onFileStreamReady?: (stream: MediaStream | null, videoElement: HTMLVideoElement) => void;
-  onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
+  onAudioFileReady?: (stream: MediaStream | null, audioElement: HTMLAudioElement) => void;
+  onInputSourceChange?: (source: "hls" | "video_file" | "audio_file" | "external_audio") => void;
   agentLogs?: AgentLog[];
   agent?: Agent | null;
   onClearLogs?: () => void;
   onResumeAgent?: () => void;
   userOverrideActive?: boolean;
   onUserOverride?: () => void;
+  agentRuntime?: AgentRuntimeMetrics;
+  agentAudioHealth?: AudioReactiveHealth;
+  activeAgent?: Agent | null;
+  onAgentSelect?: (agent: Agent) => void;
 }
 
 interface LogEntry {
@@ -71,8 +78,10 @@ export default function ControlDrawerContent({
   configSchema,
   onParamChange,
   sendParameterUpdate,
+  currentParameters = {},
   onStreamReady,
   onFileStreamReady,
+  onAudioFileReady,
   onInputSourceChange,
   agentLogs = [],
   agent = null,
@@ -80,6 +89,10 @@ export default function ControlDrawerContent({
   onResumeAgent,
   userOverrideActive = false,
   onUserOverride,
+  agentRuntime,
+  agentAudioHealth,
+  activeAgent,
+  onAgentSelect,
 }: ControlDrawerContentProps) {
   const updateSettings = (updates: Partial<ShowSettings>) => {
     if (!settings) return;
@@ -95,6 +108,7 @@ export default function ControlDrawerContent({
         onSettingsChange={updateSettings}
         onStreamReady={onStreamReady}
         onFileStreamReady={onFileStreamReady}
+        onAudioFileReady={onAudioFileReady}
         onInputSourceChange={onInputSourceChange}
       />
     );
@@ -126,12 +140,20 @@ export default function ControlDrawerContent({
         configSchema={configSchema}
         onParamChange={onParamChange}
         sendParameterUpdate={sendParameterUpdate}
+        currentParameters={currentParameters}
       />
     );
   }
 
   if (panel === "agent") {
-    return <AgentPanel settings={settings} onSettingsChange={updateSettings} />;
+    return (
+      <AgentPanel
+        settings={settings}
+        onSettingsChange={updateSettings}
+        activeAgent={activeAgent}
+        onAgentSelect={onAgentSelect}
+      />
+    );
   }
 
   if (panel === "log") {
@@ -143,6 +165,9 @@ export default function ControlDrawerContent({
         onClearLogs={onClearLogs}
         onResumeAgent={onResumeAgent}
         userOverrideActive={userOverrideActive}
+        onUserOverride={onUserOverride}
+        agentRuntime={agentRuntime}
+        agentAudioHealth={agentAudioHealth}
       />
     );
   }
@@ -155,146 +180,42 @@ function InputPanel({
   onSettingsChange,
   onStreamReady,
   onFileStreamReady,
+  onAudioFileReady,
   onInputSourceChange,
 }: {
   settings: ShowSettings | null;
   onSettingsChange: (updates: Partial<ShowSettings>) => void;
   onStreamReady?: (stream: MediaStream | null) => void;
   onFileStreamReady?: (stream: MediaStream | null, videoElement: HTMLVideoElement) => void;
-  onInputSourceChange?: (source: 'webcam' | 'file' | 'hls') => void;
+  onAudioFileReady?: (stream: MediaStream | null, audioElement: HTMLAudioElement) => void;
+  onInputSourceChange?: (source: "hls" | "video_file" | "audio_file" | "external_audio") => void;
 }) {
-  const [audioEnabled, setAudioEnabled] = useState(false);
-  const [videoEnabled, setVideoEnabled] = useState(false);
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedAudio, setSelectedAudio] = useState("");
-  const [selectedVideo, setSelectedVideo] = useState("");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [currentSource, setCurrentSource] = useState<'webcam' | 'file' | 'hls'>('webcam');
+  const [audioReady, setAudioReady] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
+  const [externalAudioStatus, setExternalAudioStatus] = useState<string>("");
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const videoFileRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previousLumaRef = useRef<Float32Array | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    async function getDevices() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
-        setVideoDevices(devices.filter((d) => d.kind === "videoinput"));
-        if (devices.some((d) => d.kind === "audioinput")) {
-          setSelectedAudio(devices.find((d) => d.kind === "audioinput")?.deviceId || "");
-        }
-        if (devices.some((d) => d.kind === "videoinput")) {
-          setSelectedVideo(devices.find((d) => d.kind === "videoinput")?.deviceId || "");
-        }
-      } catch (err) {
-        console.error("Failed to enumerate devices:", err);
-      }
-    }
-    getDevices();
-  }, []);
+  const audioFileRef = useRef<HTMLAudioElement | null>(null);
 
   const stopAllSources = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
     if (videoFileRef.current) {
       videoFileRef.current.pause();
       videoFileRef.current.src = "";
       videoFileRef.current = null;
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
+    if (audioFileRef.current) {
+      audioFileRef.current.pause();
+      audioFileRef.current.src = "";
+      audioFileRef.current = null;
     }
-    previousLumaRef.current = null;
   }, []);
-
-  const startVideo = useCallback(async () => {
-    try {
-      stopAllSources();
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: selectedVideo ? { deviceId: { exact: selectedVideo } } : true,
-        audio: audioEnabled && selectedAudio ? { deviceId: { exact: selectedAudio } } : false,
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setVideoEnabled(true);
-      setCurrentSource('webcam');
-      onStreamReady?.(stream);
-      onInputSourceChange?.('webcam');
-      onSettingsChange({ inputType: 'camera' });
-    } catch (err) {
-      console.error("Failed to start video:", err);
-    }
-  }, [selectedVideo, audioEnabled, selectedAudio, stopAllSources, onStreamReady, onInputSourceChange, onSettingsChange]);
-
-  const stopVideo = useCallback(() => {
-    stopAllSources();
-    setVideoEnabled(false);
-    setCurrentSource('webcam');
-    onStreamReady?.(null);
-  }, [stopAllSources, onStreamReady]);
-
-  const detectPerformers = (
-    motionMask: Uint8Array,
-    width: number,
-    height: number,
-  ): Array<{ x: number; y: number; size: number }> => {
-    const visited = new Uint8Array(width * height);
-    const performers: Array<{ x: number; y: number; size: number }> = [];
-    const minBlobArea = 24;
-
-    for (let i = 0; i < motionMask.length; i += 1) {
-      if (motionMask[i] === 0 || visited[i] === 1) continue;
-
-      const queue = [i];
-      visited[i] = 1;
-      let area = 0;
-      let sumX = 0;
-      let sumY = 0;
-
-      while (queue.length > 0) {
-        const current = queue.pop()!;
-        const y = Math.floor(current / width);
-        const x = current - y * width;
-
-        area += 1;
-        sumX += x;
-        sumY += y;
-
-        const neighbors = [current - 1, current + 1, current - width, current + width];
-
-        for (const n of neighbors) {
-          if (n < 0 || n >= motionMask.length) continue;
-          if (visited[n] === 1 || motionMask[n] === 0) continue;
-          visited[n] = 1;
-          queue.push(n);
-        }
-      }
-
-      if (area >= minBlobArea) {
-        performers.push({ x: sumX / area, y: sumY / area, size: area });
-      }
-    }
-
-    return performers.sort((a, b) => b.size - a.size).slice(0, 8);
-  };
 
   const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -316,115 +237,120 @@ function InputPanel({
         video.onerror = () => reject(new Error('Failed to load video file'));
       });
 
-      const outputCanvas = document.createElement('canvas');
-      outputCanvas.width = video.videoWidth || 640;
-      outputCanvas.height = video.videoHeight || 480;
-      canvasRef.current = outputCanvas;
-      const outCtx = outputCanvas.getContext('2d');
-
-      const analysisCanvas = document.createElement('canvas');
-      analysisCanvas.width = 160;
-      analysisCanvas.height = 90;
-      analysisCanvasRef.current = analysisCanvas;
-      const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
-
-      const previewCtx = previewCanvasRef.current?.getContext('2d');
-
-      if (!outCtx || !analysisCtx) {
-        console.error('Failed to initialize canvas contexts');
-        return;
-      }
-
       await video.play();
 
-      const stream = outputCanvas.captureStream(15);
-      streamRef.current = stream;
-
-      const drawFrame = () => {
-        if (!videoFileRef.current || !canvasRef.current) {
-          animationFrameRef.current = requestAnimationFrame(drawFrame);
-          return;
-        }
-
-        const outW = canvasRef.current.width;
-        const outH = canvasRef.current.height;
-
-        outCtx.drawImage(videoFileRef.current, 0, 0, outW, outH);
-
-        analysisCtx.drawImage(videoFileRef.current, 0, 0, analysisCanvas.width, analysisCanvas.height);
-        const frame = analysisCtx.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
-
-        const pixelCount = analysisCanvas.width * analysisCanvas.height;
-        const luma = new Float32Array(pixelCount);
-        const motionMask = new Uint8Array(pixelCount);
-
-        for (let p = 0; p < pixelCount; p += 1) {
-          const idx = p * 4;
-          const r = frame.data[idx] / 255;
-          const g = frame.data[idx + 1] / 255;
-          const b = frame.data[idx + 2] / 255;
-          luma[p] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        }
-
-        const previous = previousLumaRef.current;
-        if (previous) {
-          for (let p = 0; p < pixelCount; p += 1) {
-            motionMask[p] = Math.abs(luma[p] - previous[p]) > 0.11 ? 1 : 0;
-          }
-        }
-        previousLumaRef.current = luma;
-
-        const performers = detectPerformers(motionMask, analysisCanvas.width, analysisCanvas.height);
-        const sx = outW / analysisCanvas.width;
-        const sy = outH / analysisCanvas.height;
-        const points = performers.map((blob) => ({ x: blob.x * sx, y: blob.y * sy })).sort((a, b) => a.x - b.x);
-
-        if (points.length > 1) {
-          outCtx.strokeStyle = 'rgba(255, 230, 120, 0.85)';
-          outCtx.lineWidth = 2;
-          outCtx.beginPath();
-          points.forEach((point, idx) => {
-            if (idx === 0) outCtx.moveTo(point.x, point.y);
-            else outCtx.lineTo(point.x, point.y);
-          });
-          outCtx.stroke();
-        }
-
-        points.forEach((point) => {
-          outCtx.fillStyle = 'rgba(255, 235, 90, 0.95)';
-          outCtx.beginPath();
-          outCtx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-          outCtx.fill();
-        });
-
-        if (previewCtx && previewCanvasRef.current) {
-          previewCanvasRef.current.width = outW;
-          previewCanvasRef.current.height = outH;
-          previewCtx.drawImage(canvasRef.current, 0, 0);
-        }
-
-        animationFrameRef.current = requestAnimationFrame(drawFrame);
+      const videoWithCapture = video as HTMLVideoElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
       };
-
-      drawFrame();
-
-      setVideoEnabled(false);
+      const stream = (videoWithCapture.captureStream?.() || videoWithCapture.mozCaptureStream?.()) as MediaStream;
+      streamRef.current = stream;
       setVideoFile(file);
-      setCurrentSource('file');
       onStreamReady?.(stream);
       onFileStreamReady?.(stream, video);
-      onInputSourceChange?.('file');
+      onInputSourceChange?.("video_file");
       onSettingsChange({ inputType: 'video' });
     } catch (err) {
       console.error('Failed to process uploaded video:', err);
     }
   };
 
-  const handleAudioFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAudioFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (!file) return;
+
+    try {
+      const audio = document.createElement("audio");
+      audio.src = URL.createObjectURL(file);
+      audio.loop = true;
+      audio.autoplay = true;
+      audio.controls = false;
+      audioFileRef.current = audio;
+
+      await audio.play();
+
+      const audioWithCapture = audio as HTMLAudioElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
+      };
+      const stream = (audioWithCapture.captureStream?.() || audioWithCapture.mozCaptureStream?.()) as MediaStream;
+      streamRef.current = stream;
+      setAudioReady(true);
       setAudioFile(file);
+      onStreamReady?.(stream);
+      onAudioFileReady?.(stream, audio);
+      onInputSourceChange?.("audio_file");
       onSettingsChange({ inputType: "audio" });
+    } catch (err) {
+      console.error("Failed to load audio file:", err);
+    }
+  };
+
+  const handleUseHls = () => {
+    stopAllSources();
+    setVideoFile(null);
+    setAudioFile(null);
+    setAudioReady(false);
+    onStreamReady?.(null);
+    onInputSourceChange?.("hls");
+    onSettingsChange({ inputType: "hls" as any });
+  };
+
+  const handleUseMicrophone = async () => {
+    try {
+      stopAllSources();
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const micAudio = document.createElement("audio");
+      micAudio.srcObject = micStream;
+      micAudio.autoplay = true;
+      micAudio.controls = false;
+      micAudio.muted = true;
+      micAudio.dataset.inputSource = "external_audio";
+      audioFileRef.current = micAudio;
+      streamRef.current = micStream;
+      setExternalAudioStatus("Live mic/line-in connected");
+      onStreamReady?.(micStream);
+      onAudioFileReady?.(micStream, micAudio);
+      onInputSourceChange?.("external_audio");
+      onSettingsChange({ inputType: "audio" });
+    } catch (error) {
+      console.error("Failed to access microphone/line-in:", error);
+      setExternalAudioStatus("Microphone/line-in access failed");
+    }
+  };
+
+  const handleUseAudioUrl = async () => {
+    if (!audioUrl.trim()) return;
+    try {
+      stopAllSources();
+      const audio = document.createElement("audio");
+      audio.src = audioUrl.trim();
+      audio.autoplay = true;
+      audio.controls = false;
+      audio.crossOrigin = "anonymous";
+      audio.dataset.inputSource = "external_audio";
+      audioFileRef.current = audio;
+      await audio.play();
+      const audioWithCapture = audio as HTMLAudioElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
+      };
+      const stream = (audioWithCapture.captureStream?.() || audioWithCapture.mozCaptureStream?.()) as MediaStream;
+      streamRef.current = stream;
+      setExternalAudioStatus("External audio URL connected");
+      onStreamReady?.(stream);
+      onAudioFileReady?.(stream, audio);
+      onInputSourceChange?.("external_audio");
+      onSettingsChange({ inputType: "audio" });
+    } catch (error) {
+      console.error("Failed to connect audio URL:", error);
+      setExternalAudioStatus("External audio URL failed");
     }
   };
 
@@ -436,93 +362,37 @@ function InputPanel({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Input Source</div>
+      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">File Inputs</div>
 
-      <div className="flex gap-2">
-        <button
-          onClick={() => {
-            if (videoEnabled) {
-              stopVideo();
-            } else {
-              startVideo();
-            }
-          }}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${videoEnabled
-            ? "border-green-500/60 bg-green-500/20 text-green-400"
-            : "border-white/10 hover:border-white/30 text-white/70"
-            }`}
-        >
-          <Camera className="h-4 w-4" />
-          <span className="text-[10px] uppercase tracking-wider">Video</span>
-        </button>
-
-        <button
-          onClick={() => setAudioEnabled(!audioEnabled)}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 transition-all ${audioEnabled
-            ? "border-green-500/60 bg-green-500/20 text-green-400"
-            : "border-white/10 hover:border-white/30 text-white/70"
-            }`}
-        >
-          <Music className="h-4 w-4" />
-          <span className="text-[10px] uppercase tracking-wider">Audio</span>
-        </button>
-      </div>
-
-      {videoEnabled && (
-        <div className="space-y-2">
-          <video
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            className="w-full aspect-video rounded-lg bg-black object-contain"
+      {/* <button
+        onClick={handleUseHls}
+        className="w-full rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/20"
+      >
+        Use Live HLS Input
+      </button>
+      <button
+        onClick={handleUseMicrophone}
+        className="w-full rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-200 hover:bg-emerald-500/20 flex items-center justify-center gap-2"
+      >
+        <Mic className="h-3.5 w-3.5" />
+        Use Mic / Line-In Audio
+      </button> */}
+      <div className="rounded-lg border border-white/10 bg-black/30 p-2 space-y-2">
+        <div className="text-[9px] uppercase tracking-wider text-white/50">External Audio URL</div>
+        <div className="flex gap-2">
+          <input
+            value={audioUrl}
+            onChange={(e) => setAudioUrl(e.target.value)}
+            placeholder="https://.../live-audio.mp3"
+            className="flex-1 rounded-md border border-white/10 bg-black/50 px-2 py-1.5 text-[10px] text-white/70"
           />
-          <select
-            value={selectedVideo}
-            onChange={(e) => setSelectedVideo(e.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-[10px] text-white/70"
+          <button
+            onClick={handleUseAudioUrl}
+            className="rounded-md border border-white/20 bg-white/5 px-2 py-1.5 text-[10px] uppercase tracking-wider text-white/70 hover:bg-white/10 flex items-center gap-1"
           >
-            <option value="">Default Camera</option>
-            {videoDevices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>
-                {d.label || `Camera ${d.deviceId.slice(0, 8)}`}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {audioEnabled && (
-        <select
-          value={selectedAudio}
-          onChange={(e) => setSelectedAudio(e.target.value)}
-          className="w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-[10px] text-white/70"
-        >
-          <option value="">Default Microphone</option>
-          {audioDevices.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>
-              {d.label || `Microphone ${d.deviceId.slice(0, 8)}`}
-            </option>
-          ))}
-        </select>
-      )}
-
-      {currentSource === 'file' && (
-        <div className="space-y-2">
-          <div className="text-[9px] uppercase tracking-wider text-white/40">Tracked Video Preview</div>
-          <canvas
-            ref={previewCanvasRef}
-            className="w-full aspect-video rounded-lg bg-black object-contain border border-white/10"
-          />
-        </div>
-      )}
-
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t border-white/10" />
-        </div>
-        <div className="relative flex justify-center text-[9px] uppercase tracking-wider text-white/40">
-          <span className="bg-[#05070f] px-2">or</span>
+            <Link2 className="h-3 w-3" />
+            Connect
+          </button>
         </div>
       </div>
 
@@ -561,7 +431,7 @@ function InputPanel({
             </span>
             <input
               type="file"
-              accept="audio/*"
+              accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
               onChange={handleAudioFileChange}
               className="hidden"
             />
@@ -579,6 +449,17 @@ function InputPanel({
           )}
         </div>
       </div>
+
+      {audioReady && (
+        <div className="text-[10px] uppercase tracking-wider text-green-400">
+          Audio file stream ready
+        </div>
+      )}
+      {externalAudioStatus && (
+        <div className="text-[10px] uppercase tracking-wider text-cyan-300">
+          {externalAudioStatus}
+        </div>
+      )}
     </div>
   );
 }
@@ -770,6 +651,7 @@ function ControlsPanel({
   configSchema,
   onParamChange,
   sendParameterUpdate,
+  currentParameters,
 }: {
   isConnected: boolean;
   isConnecting: boolean;
@@ -778,62 +660,141 @@ function ControlsPanel({
   configSchema: Record<string, any> | null;
   onParamChange: (key: string, value: any) => void;
   sendParameterUpdate: (params: Record<string, any>) => void;
+  currentParameters: Record<string, any>;
 }) {
   const [localParams, setLocalParams] = useState<Record<string, any>>({});
+
+  const getUi = (field: any) => field?.ui || field?.json_schema_extra || {};
+  const getMin = (field: any) => {
+    if (typeof field.minimum === "number") return field.minimum;
+    if (typeof field.min === "number") return field.min;
+    if (typeof field.ge === "number") return field.ge;
+    return undefined;
+  };
+  const getMax = (field: any) => {
+    if (typeof field.maximum === "number") return field.maximum;
+    if (typeof field.max === "number") return field.max;
+    if (typeof field.le === "number") return field.le;
+    return undefined;
+  };
+  const getStep = (field: any, inferredType: string) => {
+    if (typeof field.step === "number") return field.step;
+    if (typeof field.multipleOf === "number") return field.multipleOf;
+    return inferredType === "integer" ? 1 : 0.01;
+  };
+  const inferType = (field: any, ui: any) => {
+    if (ui?.component === "toggle") return "boolean";
+    if (ui?.component === "slider") return field?.type === "integer" ? "integer" : "number";
+    if (ui?.component === "select") return "enum";
+    if (Array.isArray(field?.enum) && field.enum.length > 0) return "enum";
+    if (field?.type === "integer") return "integer";
+    if (field?.type === "number") return "number";
+    if (field?.type === "boolean") return "boolean";
+    return "string";
+  };
+
+  const normalizedSchema = useCallback(() => {
+    if (!configSchema) return [] as Array<{ key: string; field: any; ui: any }>;
+    const schemaRoot = (configSchema as any).properties ? (configSchema as any).properties : configSchema;
+    return Object.entries(schemaRoot)
+      .filter(([, field]) => field && typeof field === "object")
+      .map(([key, field]) => ({ key, field, ui: getUi(field) }))
+      .sort((a, b) => {
+        const orderA = typeof a.ui?.order === "number" ? a.ui.order : Number.MAX_SAFE_INTEGER;
+        const orderB = typeof b.ui?.order === "number" ? b.ui.order : Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.key.localeCompare(b.key);
+      });
+  }, [configSchema]);
+
+  useEffect(() => {
+    setLocalParams((prev) => ({ ...prev, ...currentParameters }));
+  }, [currentParameters]);
 
   const handleParamChange = (key: string, value: any) => {
     const newParams = { ...localParams, [key]: value };
     setLocalParams(newParams);
+    onParamChange(key, value);
     sendParameterUpdate({ [key]: value });
+  };
+
+  const resetToSchemaDefaults = () => {
+    const fields = normalizedSchema();
+    if (!fields.length) return;
+    const defaults: Record<string, unknown> = {};
+    for (const { key, field } of fields) {
+      if ("default" in field) {
+        defaults[key] = (field as { default?: unknown }).default;
+      }
+    }
+    setLocalParams(defaults);
+    sendParameterUpdate(defaults);
   };
 
   const renderField = (key: string, field: any) => {
     const value = localParams[key] ?? field.default;
+    const ui = getUi(field);
+    const inferredType = inferType(field, ui);
+    const min = getMin(field);
+    const max = getMax(field);
+    const step = getStep(field, inferredType);
+    const enumOptions = Array.isArray(field?.enum)
+      ? field.enum
+      : Array.isArray(ui?.options)
+        ? ui.options.map((opt: any) => (typeof opt === "string" ? opt : String(opt?.value)))
+        : [];
 
-    if (field.type === "boolean") {
+    if (inferredType === "boolean") {
       return (
         <button
-          onClick={() => handleParamChange(key, !value)}
-          className={`h-5 w-9 rounded-full transition-colors ${value ? "bg-yellow-500" : "bg-white/20"}`}
+          onClick={() => handleParamChange(key, !(value ?? false))}
+          className={`relative h-5 w-9 rounded-full transition-colors ${(value ?? false) ? "bg-yellow-500" : "bg-white/20"}`}
         >
           <span
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${value ? "left-4" : "left-0.5"
+            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${(value ?? false) ? "translate-x-4" : "translate-x-0"
               }`}
-            style={{ position: "relative" }}
+            style={{ left: "2px" }}
           />
         </button>
       );
     }
 
-    if (field.type === "number" && field.minimum !== undefined && field.maximum !== undefined) {
+    if ((inferredType === "number" || inferredType === "integer") && min !== undefined && max !== undefined) {
       return (
         <div className="space-y-1">
           <input
             type="range"
-            min={field.minimum}
-            max={field.maximum}
-            step={field.step || 0.1}
-            value={value}
-            onChange={(e) => handleParamChange(key, parseFloat(e.target.value))}
+            min={min}
+            max={max}
+            step={step}
+            value={typeof value === "number" ? value : field.default ?? min}
+            onChange={(e) =>
+              handleParamChange(
+                key,
+                inferredType === "integer" ? Math.round(Number(e.target.value)) : parseFloat(e.target.value)
+              )
+            }
             className="w-full h-1.5 rounded-full appearance-none bg-white/20 accent-yellow-500"
           />
           <div className="flex justify-between text-[9px] text-white/40">
-            <span>{field.minimum}</span>
-            <span className="text-yellow-400">{typeof value === "number" ? value.toFixed(2) : value}</span>
-            <span>{field.maximum}</span>
+            <span>{min}</span>
+            <span className="text-yellow-400">
+              {typeof value === "number" ? (inferredType === "integer" ? Math.round(value) : value.toFixed(2)) : String(value ?? "")}
+            </span>
+            <span>{max}</span>
           </div>
         </div>
       );
     }
 
-    if (field.enum) {
+    if (inferredType === "enum" && enumOptions.length > 0) {
       return (
         <select
-          value={value}
+          value={String(value ?? enumOptions[0] ?? "")}
           onChange={(e) => handleParamChange(key, e.target.value)}
           className="w-full rounded-lg border border-white/10 bg-black/50 px-2 py-1.5 text-[10px] text-white/70"
         >
-          {field.enum.map((opt: string) => (
+          {enumOptions.map((opt: string) => (
             <option key={opt} value={opt}>
               {opt}
             </option>
@@ -844,12 +805,14 @@ function ControlsPanel({
 
     return (
       <input
-        type={field.type === "number" ? "number" : "text"}
-        value={value}
+        type={inferredType === "number" || inferredType === "integer" ? "number" : "text"}
+        value={value ?? ""}
         onChange={(e) =>
           handleParamChange(
             key,
-            field.type === "number" ? parseFloat(e.target.value) : e.target.value
+            inferredType === "number" || inferredType === "integer"
+              ? (e.target.value === "" ? "" : Number(e.target.value))
+              : e.target.value
           )
         }
         className="w-full rounded-lg border border-white/10 bg-black/50 px-2 py-1.5 text-[10px] text-white/70"
@@ -858,16 +821,39 @@ function ControlsPanel({
   };
 
   return (
-    <div className="mt-4 space-y-4">
-      <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Stream Configs</div>
+    <div className="mt-4 space-y-4 overflow-y-auto">
+      {/* <div className="flex items-center gap-2">
+        <button
+          onClick={onConnect}
+          disabled={isConnected || isConnecting}
+          className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-green-300 disabled:opacity-40"
+        >
+          {isConnecting ? "Connecting..." : "Start"}
+        </button>
+        <button
+          onClick={onDisconnect}
+          disabled={!isConnected}
+          className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-red-300 disabled:opacity-40"
+        >
+          Stop
+        </button>
+        <button
+          onClick={resetToSchemaDefaults}
+          disabled={!configSchema}
+          className="rounded-md border border-white/20 bg-white/5 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-white/70 disabled:opacity-40"
+        >
+          Reset Defaults
+        </button>
+      </div> */}
+
       {configSchema && (
-        <div className="space-y-3">
-          <div className="text-[10px] uppercase tracking-wider text-white/50">Parameters</div>
-          {Object.entries(configSchema).map(([key, field]) => (
-            <div key={key}>
-              <label className="text-[9px] uppercase tracking-wider text-white/40 block mb-1">
-                {field.description || key}
+        <div className="space-y-3 ">
+          {normalizedSchema().map(({ key, field, ui }) => (
+            <div key={key} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+              <label className="text-[9px] uppercase tracking-wider text-white/60 block mb-1">
+                {(ui?.label as string) || field.description || key}
               </label>
+              <div className="mb-2 text-[9px] text-white/35 break-all">{key}</div>
               {renderField(key, field)}
             </div>
           ))}
@@ -888,20 +874,30 @@ function ControlsPanel({
 function AgentPanel({
   settings,
   onSettingsChange,
+  activeAgent,
+  onAgentSelect,
 }: {
   settings: ShowSettings | null;
   onSettingsChange: (updates: Partial<ShowSettings>) => void;
+  activeAgent?: Agent | null;
+  onAgentSelect?: (agent: Agent) => void;
 }) {
   return (
     <div className="mt-4 space-y-3">
       <div className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Select Agent</div>
+      <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[9px] uppercase tracking-wider text-white/70">
+        Active: <span className="text-yellow-300">{activeAgent?.name || settings?.agent || "None"}</span>
+      </div>
 
       {AGENTS.map((agent) => {
-        const isActive = settings?.agent === agent.name;
+        const isActive = (activeAgent?.name || settings?.agent) === agent.name;
         return (
           <button
             key={agent.name}
-            onClick={() => onSettingsChange({ agent: agent.name })}
+            onClick={() => {
+              onSettingsChange({ agent: agent.name });
+              onAgentSelect?.(agent);
+            }}
             className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-all w-full ${isActive
               ? "border-yellow-500/60 bg-yellow-500/10"
               : "border-white/10 hover:border-white/30"
@@ -947,6 +943,9 @@ function LogPanel({
   onClearLogs,
   onResumeAgent,
   userOverrideActive,
+  onUserOverride,
+  agentRuntime,
+  agentAudioHealth,
 }: { 
   isConnected: boolean;
   logs?: AgentLog[];
@@ -954,7 +953,11 @@ function LogPanel({
   onClearLogs?: () => void;
   onResumeAgent?: () => void;
   userOverrideActive?: boolean;
+  onUserOverride?: () => void;
+  agentRuntime?: AgentRuntimeMetrics;
+  agentAudioHealth?: AudioReactiveHealth;
 }) {
+  const [viewMode, setViewMode] = useState<"logs" | "runtime">("logs");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [isPolling, setIsPolling] = useState(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -967,7 +970,16 @@ function LogPanel({
       if (response.ok) {
         const data = await response.json();
         if (data.logs) {
-          setScopeLogs((prev) => [...prev, ...data.logs].slice(-100));
+          setScopeLogs((prev) => {
+            const merged = [...prev, ...data.logs].slice(-200);
+            const seen = new Set<string>();
+            return merged.filter((entry) => {
+              const key = `${entry.timestamp}|${entry.source}|${entry.message}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            }).slice(-100);
+          });
         }
       }
     } catch (err) {
@@ -993,19 +1005,18 @@ function LogPanel({
 
   // Combine agent logs with scope logs
   const allLogs = [
-    ...(scopeLogs.map(l => ({
-      id: `scope-${l.timestamp}`,
-      timestamp: new Date(l.timestamp),
-      agent: l.source,
+    ...((logs || []).map((l) => ({
+      ...l,
+      timestamp: l.timestamp instanceof Date ? l.timestamp : new Date(l.timestamp),
+    }))),
+    ...(scopeLogs.map((l, index) => ({
+      id: `scope-${l.timestamp}-${index}`,
+      timestamp: Number.isNaN(new Date(l.timestamp).getTime()) ? new Date() : new Date(l.timestamp),
+      agent: l.source || "scope",
       type: "system" as const,
       content: l.message,
     }))),
-    ...(logs || []),
-  ].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [allLogs.length]);
+  ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   const AGENT_COLORS: Record<string, string> = {
     echo: "#06b6d4",
@@ -1026,9 +1037,32 @@ function LogPanel({
 
   return (
     <div className="mt-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setViewMode("logs")}
+          className={`rounded px-2 py-1 text-[9px] uppercase tracking-wider ${viewMode === "logs" ? "bg-white/20 text-white" : "bg-white/5 text-white/50"}`}
+        >
+          Logs
+        </button>
+        <button
+          onClick={() => setViewMode("runtime")}
+          className={`rounded px-2 py-1 text-[9px] uppercase tracking-wider ${viewMode === "runtime" ? "bg-white/20 text-white" : "bg-white/5 text-white/50"}`}
+        >
+          Runtime
+        </button>
+      </div>
+
       <div className="flex items-center justify-between">
         <div className="text-[10px] uppercase tracking-wider text-white/50">Agent Logs</div>
         <div className="flex items-center gap-2">
+          {!userOverrideActive && onUserOverride && (
+            <button
+              onClick={onUserOverride}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-yellow-500/20 hover:bg-yellow-500/30 text-[9px] text-yellow-300 transition-colors"
+            >
+              Manual
+            </button>
+          )}
           {userOverrideActive && onResumeAgent && (
             <button
               onClick={onResumeAgent}
@@ -1056,10 +1090,28 @@ function LogPanel({
         </div>
       )}
 
+      {viewMode === "runtime" ? (
+        <div className="rounded-lg border border-white/10 bg-black/30 p-3 text-[10px] space-y-2">
+          <RuntimeItem label="Audio Provider" value={agentAudioHealth?.provider || "N/A"} />
+          <RuntimeItem label="OSC Bridge" value={agentAudioHealth ? (agentAudioHealth.oscConnected ? "connected" : "disconnected") : "N/A"} />
+          <RuntimeItem label="Effective Update Interval" value={agentAudioHealth ? `${Math.round(agentAudioHealth.effectiveUpdateIntervalMs)}ms` : "N/A"} />
+          <RuntimeItem label="Last Reasoning" value={agentRuntime?.lastReasoningAt ? formatTime(agentRuntime.lastReasoningAt) : "N/A"} />
+          <RuntimeItem label="Last Prompt" value={agentRuntime?.lastPromptAt ? formatTime(agentRuntime.lastPromptAt) : "N/A"} />
+          <RuntimeItem label="Next Prompt Earliest" value={agentRuntime?.nextPromptEarliestAt ? formatTime(agentRuntime.nextPromptEarliestAt) : "N/A"} />
+          <RuntimeItem label="Last Control Action" value={agentRuntime?.lastControlAt ? formatTime(agentRuntime.lastControlAt) : "N/A"} />
+          <RuntimeItem label="Next Control Earliest" value={agentRuntime?.nextControlEarliestAt ? formatTime(agentRuntime.nextControlEarliestAt) : "N/A"} />
+          <RuntimeItem label="Reasoning Interval" value={`${Math.round((agentRuntime?.reasoningIntervalMs || 0) / 1000)}s`} />
+          <RuntimeItem label="Prompt Interval" value={`${Math.round((agentRuntime?.promptIntervalMs || 0) / 1000)}s`} />
+          <RuntimeItem label="Control Interval" value={`${Math.round((agentRuntime?.controlIntervalMs || 0) / 1000)}s`} />
+          <RuntimeItem label="Prompts Sent" value={`${agentRuntime?.promptsSent ?? 0}`} />
+          <RuntimeItem label="Control Actions Sent" value={`${agentRuntime?.controlsSent ?? 0}`} />
+          <RuntimeItem label="Total Actions Executed" value={`${agentRuntime?.totalActionsExecuted ?? 0}`} />
+        </div>
+      ) : (
       <div className="rounded-lg border border-white/10 bg-black/30 max-h-[300px] overflow-y-auto">
         {allLogs.length === 0 ? (
           <div className="p-4 text-center text-[10px] text-white/40">
-            {isPolling ? "Agent logs will appear here..." : "Start stream to begin"}
+            {isPolling ? "Waiting for first agent cycle..." : "Start stream to begin"}
           </div>
         ) : (
           <div className="divide-y divide-white/5">
@@ -1070,8 +1122,9 @@ function LogPanel({
                   className="font-medium"
                   style={{ color: AGENT_COLORS[log.agent.toLowerCase()] || "#ffffff" }}
                 >
-                  [{log.agent.toUpperCase()}]
+                  [{(log.agent || "scope").toUpperCase()}]
                 </span>{" "}
+                <span className="text-white/30">[{log.type}]</span>{" "}
                 <span className="text-white/60">{log.content}</span>
               </div>
             ))}
@@ -1079,6 +1132,16 @@ function LogPanel({
           </div>
         )}
       </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-white/5 pb-1">
+      <span className="text-white/50 uppercase tracking-wide">{label}</span>
+      <span className="text-white/80 font-mono">{value}</span>
     </div>
   );
 }
